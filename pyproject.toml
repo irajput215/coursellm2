@@ -1,0 +1,19 @@
+[project]
+name = "app"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "sqlalchemy",
+    "openai",
+    "python-dotenv",
+    "pydantic",
+    "bcrypt",
+    "python-multipart",
+    "python-jose[cryptography]"
+]
+
+
