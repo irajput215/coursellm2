@@ -1,11 +1,10 @@
-from sqlalchemy import Column,Integer,String,Boolean
-from database import Base
+from sqlmodel import SQLModel, Field
 
-class User(Base):
+class User(SQLModel, table=True):
     __tablename__ = "users"
-    id = Column(Integer, primary_key=True, index=True)
-    username = Column(String, unique=True, index=True)
-    hashed_password = Column(String)
-    is_active = Column(Boolean, default=True)
-    full_name = Column(String)
-    email = Column(String, unique=True, index=True)
+    id: int | None = Field(default=None, primary_key=True)
+    username: str = Field(unique=True, index=True)
+    hashed_password: str
+    is_active: bool = Field(default=True)
+    full_name: str | None = None
+    email: str = Field(unique=True, index=True)

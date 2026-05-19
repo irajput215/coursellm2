@@ -1,12 +1,14 @@
 fastapi 
 uvicorn 
-sqlalchemy 
+sqlmodel
 openai 
 python-dotenv
 pydantic
 bcrypt
 python-multipart
 python-jose[cryptography]
-
+psycopg2-binary
+pgvector
+alembic
 
 

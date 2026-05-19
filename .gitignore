@@ -11,3 +11,5 @@ wheels/
 .env
 .agents
 
+
+stages_plans_documentation/
