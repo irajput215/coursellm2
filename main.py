@@ -30,4 +30,4 @@ app.include_router(upload.router, prefix="/upload", tags=["upload"])
 
 @app.get("/")
 def read_root():
-    return {"message": "Welcome to the Coursellm API!"}
+    return {"message": "Welcome to the World Best Coursellm API!"}
