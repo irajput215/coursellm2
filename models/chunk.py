@@ -12,6 +12,7 @@ class Chunk(SQLModel, table=True):
     content: str
     page: int | None = None
     topic: str | None = None
+    chunk_index: int = Field(index=True)
     
-    # Vector embedding using pgvector. Assume OpenAI ada-002 -> 1536 dims
-    embedding: Any = Field(sa_column=Column(Vector(1536)))
+    # Vector embedding using pgvector. BAAI/bge-small-en-v1.5 -> 384 dims
+    embedding: Any = Field(sa_column=Column(Vector(384)))
