@@ -2,7 +2,7 @@ from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import SQLModel
 
-from api.routes import auth, upload
+from api.routes import auth, upload, ask
 from database import engine
 
 # Import all models so SQLModel knows about them
@@ -11,6 +11,8 @@ import models.course
 import models.document
 import models.chunk
 import models.chat
+import models.generation
+import models.knowledge
 
 # Create tables (For dev, use Alembic in production)
 SQLModel.metadata.create_all(engine)
@@ -27,6 +29,7 @@ app.add_middleware(
 
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(upload.router, prefix="/upload", tags=["upload"])
+app.include_router(ask.router, prefix="/ask", tags=["rag"])
 
 @app.get("/")
 def read_root():

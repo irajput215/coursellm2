@@ -26,6 +26,8 @@ import models.course
 import models.document
 import models.chunk
 import models.chat
+import models.generation
+import models.knowledge
 
 target_metadata = SQLModel.metadata
 

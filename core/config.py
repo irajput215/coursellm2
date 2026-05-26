@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     ALGORITHM:str="HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES:int = 60 * 24 * 7
     DATABASE_URL:str = os.getenv("DATABASE_URL", "postgresql://irajput@localhost:5432/ai_tutor")
+    GROQ_API_KEY: str
     model_config = {
         'env_file': '.env',
         'extra': 'ignore'
