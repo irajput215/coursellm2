@@ -28,6 +28,8 @@ import models.chunk
 import models.chat
 import models.generation
 import models.knowledge
+import models.evaluation
+import models.planner
 
 target_metadata = SQLModel.metadata
 

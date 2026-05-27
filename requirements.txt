@@ -72,6 +72,7 @@ jsonschema==4.26.0
 jsonschema-path==0.5.0
 jsonschema-specifications==2025.9.1
 keyring==25.7.0
+langfuse==4.6.1
 logfire==4.33.0
 logfire-api==4.33.0
 lxml==6.1.1
