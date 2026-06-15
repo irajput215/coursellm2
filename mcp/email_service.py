@@ -65,8 +65,8 @@ class ExtractedEvent(BaseModel):
     extraction_method: str = "rules"
 
 
-class EmailMCP:
-    """Email MCP - handles email ingestion and parsing."""
+class EmailService:
+    """In-process email ingestion and event extraction service."""
 
     def _mock_emails(self) -> List[Email]:
         return [

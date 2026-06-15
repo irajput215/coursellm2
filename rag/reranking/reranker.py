@@ -1,6 +1,7 @@
 import time
+import torch
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
-from sentence_transformers import CrossEncoder
 from rag.retrieval.schemas import SearchResult
 from observability.tracing.langfuse_client import log_pipeline_event, trace_span
 
@@ -14,7 +15,15 @@ class Reranker:
         return cls._instance
         
     def __init__(self):
-        self.model = CrossEncoder("BAAI/bge-reranker-base")
+        model_name = "BAAI/bge-reranker-base"
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.model = AutoModelForSequenceClassification.from_pretrained(model_name)
+        self.model.eval()
+
+        if torch.backends.mps.is_available():
+            self.model = self.model.to('mps')
+        elif torch.cuda.is_available():
+            self.model = self.model.to('cuda')
         
     def rerank(self, query: str, results: list[SearchResult], top_k: int = 5) -> list[SearchResult]:
         if not results:
@@ -27,7 +36,25 @@ class Reranker:
             input={"query": query, "candidate_count": len(results), "top_k": top_k},
         ) as span:
             pairs = [[query, r.chunk.content] for r in results]
-            scores = self.model.predict(pairs)
+            
+            # Tokenize pairs
+            encoded_input = self.tokenizer(
+                pairs, 
+                padding=True, 
+                truncation=True, 
+                return_tensors='pt',
+                max_length=512
+            )
+            
+            device = next(self.model.parameters()).device
+            encoded_input = {k: v.to(device) for k, v in encoded_input.items()}
+            
+            with torch.no_grad():
+                outputs = self.model(**encoded_input)
+                
+            scores = outputs.logits.squeeze(-1).cpu().tolist()
+            if not isinstance(scores, list):
+                scores = [scores]
             
             for idx, score in enumerate(scores):
                 results[idx].rerank_score = float(score)

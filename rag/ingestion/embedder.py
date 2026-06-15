@@ -1,4 +1,7 @@
-from sentence_transformers import SentenceTransformer
+import torch
+import torch.nn.functional as F
+from transformers import AutoTokenizer, AutoModel
+from typing import List
 
 class Embedder:
     _instance = None
@@ -10,13 +13,48 @@ class Embedder:
         return cls._instance
         
     def __init__(self):
-        # We load the model once into memory
-        self.model = SentenceTransformer("BAAI/bge-small-en-v1.5")
+        # Use BGE-small model (384 dimensions, efficient)
+        model_name = "BAAI/bge-small-en-v1.5"
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.model = AutoModel.from_pretrained(model_name)
+        self.model.eval()
         
-    def generate_embeddings(self, texts: list[str]) -> list[list[float]]:
+        # Move to GPU if available (optional for Mac MPS)
+        if torch.backends.mps.is_available():
+            self.model = self.model.to('mps')
+        elif torch.cuda.is_available():
+            self.model = self.model.to('cuda')
+        
+    def generate_embeddings(self, texts: List[str]) -> List[List[float]]:
         """
-        Takes a list of strings and returns a list of embedding vectors (384 dims each).
+        Takes a list of strings and returns a list of embedding vectors.
+        BGE models use CLS pooling for embeddings.
         """
-        # encode() returns a numpy array, we convert to nested lists
-        embeddings = self.model.encode(texts)
-        return embeddings.tolist()
+        # Tokenize with BGE's recommended settings
+        encoded_input = self.tokenizer(
+            texts, 
+            padding=True, 
+            truncation=True, 
+            return_tensors='pt',
+            max_length=512
+        )
+        
+        # Move to same device as model
+        device = next(self.model.parameters()).device
+        encoded_input = {k: v.to(device) for k, v in encoded_input.items()}
+        
+        # Generate embeddings
+        with torch.no_grad():
+            model_output = self.model(**encoded_input)
+        
+        # CLS pooling (first token) - recommended for BGE models
+        sentence_embeddings = model_output.last_hidden_state[:, 0, :]
+        
+        # Normalize embeddings
+        sentence_embeddings = F.normalize(sentence_embeddings, p=2, dim=1)
+        
+        return sentence_embeddings.cpu().tolist()
+    
+    def generate_embedding_single(self, text: str) -> List[float]:
+        """Convenience method for single text embedding"""
+        return self.generate_embeddings([text])[0]

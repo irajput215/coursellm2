@@ -2,8 +2,8 @@ from pydantic_ai import Agent
 from typing import Dict, List, Any
 from datetime import datetime, timedelta
 
-from mcp.email_mcp import EmailMCP
-from mcp.calendar_mcp import CalendarMCP
+from mcp.email_service import EmailService
+from mcp.calendar_service import CalendarService
 from agents.study_planner import StudyPlanGenerator
 from models.planner import EventType, Priority, PlannerEvent
 from sqlmodel import Session, select
@@ -17,8 +17,8 @@ class PlannerAgent:
     """Main orchestrator for all planning workflows."""
 
     def __init__(self):
-        self.email_mcp = EmailMCP()
-        self.calendar_mcp = CalendarMCP()
+        self.email_service = EmailService()
+        self.calendar_service = CalendarService()
         self.study_planner = StudyPlanGenerator()
 
     async def preview_incoming_emails(
@@ -27,10 +27,10 @@ class PlannerAgent:
     ) -> List[Dict[str, Any]]:
         """Dry-run: show matched emails and extracted events without writing to DB."""
         previews: list[dict[str, Any]] = []
-        emails = await self.email_mcp.fetch_recent_emails(course_name)
+        emails = await self.email_service.fetch_recent_emails(course_name)
 
         for email in emails:
-            events = await self.email_mcp.extract_events_from_email(
+            events = await self.email_service.extract_events_from_email(
                 email, course_name
             )
             previews.append(
@@ -78,11 +78,11 @@ class PlannerAgent:
         }
 
         try:
-            emails = await self.email_mcp.fetch_recent_emails(course_name)
+            emails = await self.email_service.fetch_recent_emails(course_name)
             results["emails_processed"] = len(emails)
 
             for email in emails:
-                events = await self.email_mcp.extract_events_from_email(
+                events = await self.email_service.extract_events_from_email(
                 email, course_name
             )
 
@@ -93,7 +93,7 @@ class PlannerAgent:
                             days=7
                         )
                         priority = Priority(event.priority)
-                        existing = await self.calendar_mcp.get_event_by_source(
+                        existing = await self.calendar_service.get_event_by_source(
                             user_id=user_id,
                             source_email_id=event.source_email_id,
                             event_type=event_type,
@@ -105,7 +105,7 @@ class PlannerAgent:
                                 or existing.title != event.title
                                 or existing.description != event.description
                             ):
-                                updated = await self.calendar_mcp.update_event(
+                                updated = await self.calendar_service.update_event(
                                     event_id=existing.id,
                                     title=event.title,
                                     description=event.description,
@@ -137,7 +137,7 @@ class PlannerAgent:
                                 )
                             continue
 
-                        calendar_event = await self.calendar_mcp.add_event(
+                        calendar_event = await self.calendar_service.add_event(
                             user_id=user_id,
                             title=event.title,
                             description=event.description,
@@ -163,7 +163,7 @@ class PlannerAgent:
                     except Exception as exc:
                         results["errors"].append(f"Failed for {email.id}: {exc}")
 
-            upcoming = await self.calendar_mcp.get_upcoming_events(
+            upcoming = await self.calendar_service.get_upcoming_events(
                 user_id,
                 days_ahead=30,
                 document_id=document_id,
@@ -195,7 +195,7 @@ class PlannerAgent:
         """
         Workflow 2: Generate study plan based on upcoming events and course content
         """
-        upcoming = await self.calendar_mcp.get_upcoming_events(
+        upcoming = await self.calendar_service.get_upcoming_events(
             user_id,
             days_ahead=weeks * 7,
             document_id=document_id,

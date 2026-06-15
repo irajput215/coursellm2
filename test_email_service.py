@@ -2,12 +2,12 @@ import unittest
 from datetime import datetime
 
 from core import config
-from mcp.email_mcp import Email, EmailMCP
+from mcp.email_service import Email, EmailService
 
 
-class EmailMCPTests(unittest.IsolatedAsyncioTestCase):
+class EmailServiceTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self.mcp = EmailMCP()
+        self.email_service = EmailService()
         self._original_llm = config.settings.EMAIL_USE_LLM_EXTRACTION
         config.settings.EMAIL_USE_LLM_EXTRACTION = False
 
@@ -15,19 +15,19 @@ class EmailMCPTests(unittest.IsolatedAsyncioTestCase):
         config.settings.EMAIL_USE_LLM_EXTRACTION = self._original_llm
 
     async def test_fetch_filters_by_course_code(self):
-        emails = await self.mcp.fetch_recent_emails("COMP9044")
+        emails = await self.email_service.fetch_recent_emails("COMP9044")
         self.assertEqual(len(emails), 2)
         for email in emails:
             combined = f"{email.subject} {email.body}".upper()
             self.assertIn("COMP9044", combined)
 
     async def test_fetch_skips_unrelated_course(self):
-        emails = await self.mcp.fetch_recent_emails("COMP9331")
+        emails = await self.email_service.fetch_recent_emails("COMP9331")
         self.assertEqual(len(emails), 1)
         self.assertIn("COMP9331", emails[0].subject)
 
     async def test_fetch_skips_non_actionable_course_email(self):
-        emails = await self.mcp.fetch_recent_emails("COMP9999")
+        emails = await self.email_service.fetch_recent_emails("COMP9999")
         self.assertEqual(emails, [])
 
     async def test_extract_assignment_from_body_when_subject_generic(self):
@@ -39,7 +39,9 @@ class EmailMCPTests(unittest.IsolatedAsyncioTestCase):
             received_at=datetime.utcnow(),
             is_course_email=True,
         )
-        events = await self.mcp.extract_events_from_email(email, course_code="COMP9044")
+        events = await self.email_service.extract_events_from_email(
+            email, course_code="COMP9044"
+        )
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].event_type, "exam")
         self.assertEqual(events[0].priority, "high")
@@ -54,7 +56,9 @@ class EmailMCPTests(unittest.IsolatedAsyncioTestCase):
             received_at=datetime.utcnow(),
             is_course_email=True,
         )
-        events = await self.mcp.extract_events_from_email(email, course_code="COMP9044")
+        events = await self.email_service.extract_events_from_email(
+            email, course_code="COMP9044"
+        )
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].event_type, "assignment")
         self.assertIsNotNone(events[0].due_date)
@@ -71,19 +75,21 @@ class EmailMCPTests(unittest.IsolatedAsyncioTestCase):
             received_at=datetime.utcnow(),
             is_course_email=True,
         )
-        events = await self.mcp.extract_events_from_email(email, course_code="COMP9044")
+        events = await self.email_service.extract_events_from_email(
+            email, course_code="COMP9044"
+        )
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].due_date.month, 6)
         self.assertEqual(events[0].due_date.day, 15)
         self.assertEqual(events[0].due_date.hour, 9)
 
 
-class CalendarMCPDedupTests(unittest.IsolatedAsyncioTestCase):
+class CalendarServiceDedupTests(unittest.IsolatedAsyncioTestCase):
     async def test_event_exists_returns_false_for_unknown(self):
-        from mcp.calendar_mcp import CalendarMCP
+        from mcp.calendar_service import CalendarService
         from models.planner import EventType
 
-        calendar = CalendarMCP()
+        calendar = CalendarService()
         exists = await calendar.event_exists(
             user_id="999999",
             source_email_id="does-not-exist",

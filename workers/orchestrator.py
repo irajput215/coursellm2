@@ -1,4 +1,5 @@
 import dramatiq
+from rag.ingestion.embedder import Embedder
 import workers.base
 from sqlmodel import Session, select
 from database import engine
@@ -56,3 +57,9 @@ def process_document_pipeline(document_id: int):
         logger.error(f"Pipeline failed for document {document_id}: {e}")
         update_status(document_id, 'pipeline', 'failed', str(e))
         raise e
+
+@dramatiq.actor
+def embed_texts(texts: list[str]):
+    """Process embeddings in background"""
+    embedder = Embedder.get_instance()
+    return embedder.generate_embeddings(texts)

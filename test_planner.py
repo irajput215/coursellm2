@@ -9,7 +9,7 @@ os.environ["GROQ_API_KEY"] = settings.GROQ_API_KEY
 sys.path.append(str(Path(__file__).parent.parent))
 
 from agents.planner_agent import PlannerAgent
-from mcp.calendar_mcp import CalendarMCP
+from mcp.calendar_service import CalendarService
 
 
 async def test_planner():
@@ -35,7 +35,7 @@ async def test_planner():
     print(duplicate_result)
 
     print("\nTesting calendar events scoped to document...")
-    calendar = CalendarMCP()
+    calendar = CalendarService()
     events = await calendar.get_upcoming_events(
         user_id,
         days_ahead=30,

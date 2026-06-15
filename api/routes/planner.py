@@ -4,7 +4,7 @@ from fastapi import APIRouter
 
 from agents.planner_agent import PlannerAgent
 from api.routes.auth import CurrentUserDep, SessionDep
-from mcp.calendar_mcp import CalendarMCP
+from mcp.calendar_service import CalendarService
 from schemas.planner import ProcessEmailsRequest, StudyPlanRequest
 from services.planner_context import resolve_planner_context
 
@@ -57,7 +57,7 @@ async def sync_status(
 ):
     """Calendar snapshot for a course: upcoming, past, and completed counts."""
     context = resolve_planner_context(session, current_user, course_name)
-    calendar = CalendarMCP()
+    calendar = CalendarService()
     user_id = _user_id(current_user)
 
     upcoming = await calendar.get_upcoming_events(
@@ -154,7 +154,7 @@ async def get_events(
 ):
     """Get upcoming planner events for a course."""
     context = resolve_planner_context(session, current_user, course_name)
-    calendar = CalendarMCP()
+    calendar = CalendarService()
     events = await calendar.get_upcoming_events(
         _user_id(current_user),
         days_ahead=days_ahead,

@@ -11,8 +11,8 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class CalendarMCP:
-    """Calendar MCP - manages calendar events."""
+class CalendarService:
+    """In-process planner calendar persistence service."""
 
     def _event_lookup_query(
         self,
