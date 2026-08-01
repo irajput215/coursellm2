@@ -17,7 +17,12 @@ export const Login = () => {
     setError('');
     try {
       if (isRegistering) {
-        await apiClient.post('/auth/register', { email, password });
+        await apiClient.post('/auth/register', { 
+          username: email, 
+          email: email, 
+          password: password,
+          full_name: email.split('@')[0]
+        });
       }
       // Assuming OAuth2 password flow: username & password as form data
       const formData = new URLSearchParams();
@@ -31,7 +36,15 @@ export const Login = () => {
       await login(response.data.access_token);
       navigate('/');
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Authentication failed. Please try again.');
+      let errorMsg = 'Authentication failed. Please try again.';
+      if (err.response?.data?.detail) {
+        if (typeof err.response.data.detail === 'string') {
+          errorMsg = err.response.data.detail;
+        } else if (Array.isArray(err.response.data.detail)) {
+          errorMsg = err.response.data.detail.map((e: any) => e.msg).join(', ');
+        }
+      }
+      setError(errorMsg);
     }
   };
 
@@ -86,7 +99,7 @@ export const Login = () => {
                 type="submit"
                 className="flex w-full justify-center rounded-full border border-transparent bg-linkedin-blue py-2 px-4 text-sm font-medium text-white shadow-sm hover:bg-linkedin-dark-blue focus:outline-none focus:ring-2 focus:ring-linkedin-blue focus:ring-offset-2 transition-colors"
               >
-                {isRegistering ? 'Join now' : 'Sign in'}
+                {isRegistering ? 'Register' : 'Sign In'}
               </button>
             </div>
           </form>
@@ -108,7 +121,7 @@ export const Login = () => {
                 onClick={() => setIsRegistering(!isRegistering)}
                 className="text-linkedin-blue font-semibold hover:underline"
               >
-                {isRegistering ? 'Sign in instead' : 'Join now'}
+                {isRegistering ? 'Sign in instead' : 'Register'}
               </button>
             </div>
           </div>

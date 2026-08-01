@@ -2,7 +2,7 @@ from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import SQLModel
 
-from api.routes import auth, upload, ask, evaluation, planner, observability
+from api.routes import auth, upload, ask, evaluation, planner, observability, courses
 from database import engine
 from observability.middleware import RequestContextMiddleware
 
@@ -37,6 +37,7 @@ app.include_router(ask.router, prefix="/ask", tags=["rag"])
 app.include_router(evaluation.router)
 app.include_router(planner.router)
 app.include_router(observability.router)
+app.include_router(courses.router, prefix="/courses")
 
 @app.get("/")
 def read_root():

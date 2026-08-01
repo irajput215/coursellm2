@@ -25,7 +25,7 @@ export const Navbar = () => {
       <div className="flex items-center gap-4">
         {user ? (
           <div className="flex items-center gap-4 text-sm text-linkedin-gray">
-            <span className="hidden md:inline-block font-medium">{user.full_name}</span>
+            <span className="font-medium text-linkedin-text">{user.full_name || user.username}</span>
             <button onClick={logout} className="hover:text-linkedin-text transition-colors">Sign Out</button>
           </div>
         ) : (

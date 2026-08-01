@@ -13,7 +13,7 @@ export const Sidebar = () => {
   const location = useLocation();
 
   return (
-    <aside className="w-64 bg-transparent hidden md:block pt-4 pl-4 shrink-0">
+    <aside className="w-64 bg-transparent pt-4 pl-4 shrink-0">
       <div className="bg-linkedin-card rounded-lg border border-linkedin-border overflow-hidden shadow-sm sticky top-20">
         <div className="p-4 border-b border-linkedin-border">
           <h2 className="text-sm font-semibold text-linkedin-text">Navigation</h2>
