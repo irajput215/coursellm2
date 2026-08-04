@@ -4,9 +4,16 @@ import { useAuth } from '../contexts/AuthContext';
 import { apiClient } from '../api/client';
 import { BookOpen, Calendar, Clock, Star, Plus } from 'lucide-react';
 
+interface Document {
+  id: number;
+  filename: string;
+  upload_date: string;
+}
+
 interface Course {
   id: number;
   name: string;
+  documents: Document[];
 }
 
 export const Dashboard = () => {
@@ -59,14 +66,27 @@ export const Dashboard = () => {
                 </div>
               ) : (
                 courses.map((course, idx) => (
-                  <div key={course.id} className="flex gap-4 p-3 hover:bg-linkedin-bg rounded-md transition-colors cursor-pointer border border-transparent hover:border-linkedin-border">
-                    <div className={`w-12 h-12 rounded-md flex items-center justify-center shrink-0 ${idx % 2 === 0 ? 'bg-blue-100' : 'bg-purple-100'}`}>
-                      <BookOpen className={idx % 2 === 0 ? 'text-linkedin-blue' : 'text-purple-600'} />
+                  <div key={course.id} className="flex flex-col gap-2 p-4 hover:bg-linkedin-bg rounded-md transition-colors cursor-pointer border border-transparent hover:border-linkedin-border">
+                    <div className="flex items-center gap-4">
+                      <div className={`w-12 h-12 rounded-md flex items-center justify-center shrink-0 ${idx % 2 === 0 ? 'bg-blue-100' : 'bg-purple-100'}`}>
+                        <BookOpen className={idx % 2 === 0 ? 'text-linkedin-blue' : 'text-purple-600'} />
+                      </div>
+                      <div className="flex-1">
+                        <h3 className="font-medium text-linkedin-text">{course.name}</h3>
+                        <p className="text-xs text-linkedin-gray mt-1">Course ID: {course.id}</p>
+                      </div>
                     </div>
-                    <div className="flex-1">
-                      <h3 className="font-medium text-linkedin-text">{course.name}</h3>
-                      <p className="text-xs text-linkedin-gray mt-1">Course ID: {course.id}</p>
-                    </div>
+                    {course.documents && course.documents.length > 0 && (
+                      <div className="mt-3 pl-16 space-y-2">
+                        <p className="text-xs font-semibold text-linkedin-gray uppercase tracking-wider">Uploaded Documents</p>
+                        {course.documents.map(doc => (
+                          <div key={doc.id} className="flex items-center gap-2 text-sm text-linkedin-text bg-white border border-linkedin-border p-2 rounded shadow-sm">
+                            <span className="flex-1 truncate">{doc.filename}</span>
+                            <span className="text-xs text-linkedin-gray shrink-0">{new Date(doc.upload_date).toLocaleDateString()}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ))
               )}

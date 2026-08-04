@@ -5,6 +5,7 @@ from api.routes.auth import CurrentUserDep, SessionDep
 from schemas.evaluation import EvaluationRequest, EvaluationResponse
 from services.evaluation_context import resolve_evaluation_context
 from services.grading_service import GradingService
+from agents.exam_agent import generate_exam_questions_for_course
 
 router = APIRouter(prefix="/evaluation", tags=["evaluation"])
 
@@ -46,6 +47,22 @@ async def get_progress(
     service = GradingService()
     progress = await service.get_student_progress(context, session)
     return progress
+
+
+@router.get("/exam-questions")
+async def get_exam_questions(
+    course_name: str,
+    current_user: CurrentUserDep,
+    session: SessionDep,
+):
+    """Generate 5 exam questions for the course."""
+    context = resolve_evaluation_context(session, current_user, course_name)
+    questions = await generate_exam_questions_for_course(
+        session=session,
+        course_id=context.course_id,
+        user_id=context.user_id,
+    )
+    return {"questions": questions}
 
 
 @router.post("/batch-grade")

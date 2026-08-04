@@ -8,6 +8,7 @@ import { Chat } from './pages/Chat';
 import { Upload } from './pages/Upload';
 import { Planner } from './pages/Planner';
 import { Evaluation } from './pages/Evaluation';
+import { ObservabilityPanel } from './components/ObservabilityPanel';
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { isAuthenticated, isLoading } = useAuth();
@@ -45,6 +46,7 @@ function App() {
     <AuthProvider>
       <Router>
         <AppRoutes />
+        <ObservabilityPanel />
       </Router>
     </AuthProvider>
   );

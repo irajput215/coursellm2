@@ -181,7 +181,7 @@ class GradingService:
                 LIMIT 3
                 """
             ),
-            {"course_id": context.course_id, "user_id": context.user_id},
+            params={"course_id": context.course_id, "user_id": context.user_id},
         ).all()
 
         return {

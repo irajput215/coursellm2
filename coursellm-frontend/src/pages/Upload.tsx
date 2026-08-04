@@ -4,6 +4,7 @@ import { apiClient } from '../api/client';
 
 export const Upload = () => {
   const [file, setFile] = useState<File | null>(null);
+  const [courseName, setCourseName] = useState('');
   const [status, setStatus] = useState<'idle' | 'uploading' | 'success' | 'error'>('idle');
   const [message, setMessage] = useState('');
 
@@ -15,13 +16,12 @@ export const Upload = () => {
   };
 
   const handleUpload = async () => {
-    if (!file) return;
+    if (!file || !courseName.trim()) return;
     setStatus('uploading');
     
     const formData = new FormData();
     formData.append('file', file);
-    // Assuming backend takes course_id, setting a default for UI purpose
-    formData.append('course_id', '1');
+    formData.append('course_name', courseName);
 
     try {
       await apiClient.post('/upload/', formData, {
@@ -30,10 +30,11 @@ export const Upload = () => {
       setStatus('success');
       setMessage('Document uploaded and processed successfully.');
       setFile(null);
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
       setStatus('error');
-      setMessage('Failed to upload document. Please try again.');
+      const errorMsg = error.response?.data?.detail || 'Failed to upload document. Please try again.';
+      setMessage(typeof errorMsg === 'string' ? errorMsg : 'Failed to upload document.');
     }
   };
 
@@ -78,11 +79,18 @@ export const Upload = () => {
           </div>
         )}
 
-        <div className="mt-6">
+        <div className="mt-6 flex flex-col items-center gap-4">
+          <input 
+            type="text" 
+            placeholder="Enter Course Name (e.g., Machine Learning)" 
+            value={courseName}
+            onChange={(e) => setCourseName(e.target.value)}
+            className="w-full max-w-md appearance-none rounded-md border border-linkedin-border px-3 py-2 placeholder-gray-400 shadow-sm focus:border-linkedin-blue focus:outline-none focus:ring-linkedin-blue sm:text-sm"
+          />
           <button
             onClick={handleUpload}
-            disabled={!file || status === 'uploading'}
-            className="bg-linkedin-blue text-white px-6 py-2 rounded-full font-semibold text-sm hover:bg-linkedin-dark-blue disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            disabled={!file || !courseName.trim() || status === 'uploading'}
+            className="bg-linkedin-blue text-white px-6 py-2 rounded-full font-semibold text-sm hover:bg-linkedin-dark-blue disabled:opacity-50 disabled:cursor-not-allowed transition-colors w-full max-w-md"
           >
             {status === 'uploading' ? 'Uploading & Processing...' : 'Upload to Knowledge Base'}
           </button>
