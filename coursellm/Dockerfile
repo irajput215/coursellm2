@@ -1,6 +1,9 @@
 # Use an official Python runtime as a parent image
 FROM python:3.13-slim
 
+# Create user to run as non-root (Hugging Face Spaces requirement)
+RUN useradd -m -u 1000 user
+
 # Install system dependencies required for ML libraries and Postgres
 RUN apt-get update && apt-get install -y \
     build-essential \
@@ -11,21 +14,27 @@ RUN apt-get update && apt-get install -y \
 # Install uv for fast dependency resolution
 COPY --from=ghcr.io/astral-sh/uv:0.4.15 /uv /bin/uv
 
-# Set working directory
+# Set working directory and change ownership
 WORKDIR /app
+RUN chown -R user:user /app
+
+# Switch to the non-root user
+USER user
 
 # Copy dependency files
-COPY pyproject.toml uv.lock ./
+COPY --chown=user:user pyproject.toml uv.lock ./
 
 # Install dependencies using uv
-# We use --system so we don't need to manage a virtual environment in Docker
 RUN uv sync --frozen
 
 # Copy the rest of the application code
-COPY . .
+COPY --chown=user:user . .
 
 # Set up the path to include the virtual environment created by uv sync
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Default command (overridden by render.yaml for worker vs web)
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "10000"]
+# Expose port 7860 for Hugging Face Spaces
+EXPOSE 7860
+
+# Run the start script to boot both Dramatiq and FastAPI
+CMD ["./start.sh"]
