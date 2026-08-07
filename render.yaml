@@ -21,7 +21,7 @@ services:
         generateValue: true
       - key: GROQ_API_KEY
         sync: false
-    command: "dramatiq workers.orchestrator --processes 1 --threads 4"
+    dockerCommand: "dramatiq workers.orchestrator --processes 1 --threads 4"
 
   # 2. Web API (FastAPI)
   - type: web
@@ -46,7 +46,7 @@ services:
       - key: GROQ_API_KEY
         sync: false
     # Uvicorn will bind to the PORT variable automatically provided by Render
-    command: "uvicorn main:app --host 0.0.0.0 --port $PORT"
+    dockerCommand: "uvicorn main:app --host 0.0.0.0 --port $PORT"
 
   # The Redis Instance
   - type: redis
