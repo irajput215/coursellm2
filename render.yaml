@@ -48,13 +48,13 @@ services:
     # Uvicorn will bind to the PORT variable automatically provided by Render
     command: "uvicorn main:app --host 0.0.0.0 --port $PORT"
 
-databases:
-  # The Postgres Database
-  - name: coursellm-db
-    plan: free
-
   # The Redis Instance
   - type: redis
     name: coursellm-redis
     plan: free
     ipAllowList: [] # internal only
+
+databases:
+  # The Postgres Database
+  - name: coursellm-db
+    plan: free
