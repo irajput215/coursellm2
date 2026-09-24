@@ -1,0 +1,72 @@
+# Frontend checks.
+#
+# This workflow must never fail the required checks merely because the client
+# does not exist yet: it detects the absence of `apps/web/package.json`, prints a
+# notice and exits 0. When the manifest is present it runs the same Makefile
+# targets a developer runs locally (`lint-web`, `typecheck-web`, `test-web`,
+# `build-web`), plus a lockfile-respecting install.
+
+name: frontend
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: frontend-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    name: apps/web checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Detect the client
+        id: client
+        run: |
+          if [ -f apps/web/package.json ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Notice (no client yet)
+        if: steps.client.outputs.present == 'false'
+        run: |
+          echo "::notice title=frontend skipped::apps/web/package.json is absent, so there is nothing to lint, typecheck, test or build."
+
+      - name: Set up Node
+        if: steps.client.outputs.present == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install
+        if: steps.client.outputs.present == 'true'
+        run: make install-web
+
+      - name: Lint
+        if: steps.client.outputs.present == 'true'
+        run: make lint-web
+
+      - name: Type-check
+        if: steps.client.outputs.present == 'true'
+        run: make typecheck-web
+
+      - name: Test
+        if: steps.client.outputs.present == 'true'
+        run: make test-web
+
+      - name: Build
+        if: steps.client.outputs.present == 'true'
+        run: make build-web

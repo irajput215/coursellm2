@@ -1,0 +1,153 @@
+# The RAG evaluation gate.
+#
+# This workflow runs the LLM-free half of the evaluation harness and compares the
+# result to the committed baseline. It needs a real PostgreSQL + pgvector
+# database because both runners ingest the corpus through the production
+# ingestion pipeline; it connects as the RLS-enforcing `coursellm_app` role, the
+# same role the committed baseline was measured with.
+#
+# Two deliberate properties:
+#
+# 1. **No provider key is configured.** `run_retrieval_eval` calls no model at
+#    all, and every judge-dependent metric is recorded in the report's
+#    `not_measured` map. The workflow must not pass a partial key or otherwise
+#    turn a missing measurement into a failure.
+# 2. **The report is uploaded even when the gate fails.** A failed gate with no
+#    report is undebuggable, so the upload step runs with `if: always()`.
+#
+# `paths:` keeps the gate off unrelated changes; it fires on pushes to main and
+# on pull requests that touch retrieval, prompts or the evaluation harness.
+
+name: eval
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/api/src/coursellm/rag/**"
+      - "apps/api/src/coursellm/db/**"
+      - "apps/api/alembic/**"
+      - "apps/api/pyproject.toml"
+      - "prompts/**"
+      - "evals/**"
+      - "scripts/bootstrap_db.sql"
+      - "Makefile"
+      - ".github/workflows/eval.yml"
+  pull_request:
+    paths:
+      - "apps/api/src/coursellm/rag/**"
+      - "apps/api/src/coursellm/db/**"
+      - "apps/api/alembic/**"
+      - "apps/api/pyproject.toml"
+      - "prompts/**"
+      - "evals/**"
+      - "scripts/bootstrap_db.sql"
+      - "Makefile"
+      - ".github/workflows/eval.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eval-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  retrieval-eval:
+    name: retrieval eval + regression gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # No secret is consumed by the retrieval half, but the workflow is skipped on
+    # fork pull requests so a fork can never spend evaluation budget or observe a
+    # provider key if the LLM half is wired in later. A skipped required check is
+    # reported as skipped, not failed.
+    if: >-
+      github.event_name == 'push' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_DB: coursellm_dev
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d coursellm_dev"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      PGUSER: postgres
+      DB_HOST: localhost
+      DB_PORT: "5432"
+      DB_NAME: coursellm_dev
+      TEST_DB_NAME: coursellm_test
+      DB_USER: postgres
+      APP_ROLE: coursellm_app
+      ENVIRONMENT: local
+      DATABASE_URL: postgresql+asyncpg://coursellm_app@localhost:5432/coursellm_dev
+      ALEMBIC_DATABASE_URL: postgresql+asyncpg://postgres@localhost:5432/coursellm_dev
+      TEST_DATABASE_URL: postgresql+asyncpg://coursellm_app@localhost:5432/coursellm_test
+      TEST_ALEMBIC_DATABASE_URL: postgresql+asyncpg://postgres@localhost:5432/coursellm_test
+      TEST_OWNER_DATABASE_URL: postgresql+asyncpg://postgres@localhost:5432/coursellm_test
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('apps/api/pyproject.toml', 'pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install
+        run: make install
+
+      - name: Create the databases and the pgvector extension
+        run: make db-create
+
+      - name: Migrate as the schema owner
+        run: make migrate
+
+      - name: Create the restricted application role
+        run: make db-bootstrap
+
+      - name: Assert RLS is enforced for the application role
+        run: |
+          set -euo pipefail
+          make db-inspect DATABASE_URL="$DATABASE_URL" | tee /tmp/db-inspect.txt
+          grep -q 'ENFORCED by Row-Level Security' /tmp/db-inspect.txt
+
+      # No LLM: the runner records every judge-dependent metric as
+      # `not_measured` and must not fail because no provider key exists.
+      - name: Run the retrieval evaluation
+        run: make eval-retrieval
+
+      # `EVAL_CURRENT` is why `eval-gate` is not left comparing the gitignored
+      # `latest.json`: the committed baseline is a retrieval report and this is
+      # the retrieval report the previous step just wrote.
+      - name: Compare against the committed baseline
+        run: make eval-gate EVAL_CURRENT=evals/reports/retrieval.json
+
+      - name: Upload the evaluation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: retrieval-eval-report
+          path: |
+            evals/reports/retrieval.json
+            evals/reports/baseline.json
+          retention-days: 30
+          if-no-files-found: warn

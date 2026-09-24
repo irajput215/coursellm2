@@ -1,0 +1,73 @@
+# Docker build verification.
+#
+# This workflow builds both images and stops. **Nothing is pushed**: there is no
+# registry login, no `docker push`, no `terraform apply`, no Vercel step and no
+# S3 sync. Image tagging follows docs/architecture/deployment.md section 12: a
+# build is tagged with the git SHA, never `latest`, because a rollback must name
+# an immutable artefact.
+#
+# There are no third-party build actions here on purpose: `docker build` is the
+# exact command a developer runs locally, so there is nothing to drift.
+
+name: docker
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docker/**"
+      - "apps/**"
+      - "pyproject.toml"
+      - "Makefile"
+      - ".github/workflows/docker.yml"
+  pull_request:
+    paths:
+      - "docker/**"
+      - "apps/**"
+      - "pyproject.toml"
+      - "Makefile"
+      - ".github/workflows/docker.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build images (never push)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Build the API image
+        run: docker build -f docker/api.Dockerfile -t "coursellm-api:${GITHUB_SHA}" .
+
+      - name: Detect the web client
+        id: client
+        run: |
+          if [ -f apps/web/package.json ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build the web image
+        if: steps.client.outputs.present == 'true'
+        run: docker build -f docker/web.Dockerfile -t "coursellm-web:${GITHUB_SHA}" .
+
+      - name: Notice (no web client yet)
+        if: steps.client.outputs.present == 'false'
+        run: |
+          echo "::notice title=docker web image skipped::apps/web/package.json is absent; only the API image was built."
+
+      - name: Show the built images
+        run: docker image ls --filter reference='coursellm-*'
+
+      - name: Confirm the run published nothing
+        run: |
+          echo "::notice title=no push::Images are built locally and tagged by git SHA. This workflow has no push step."

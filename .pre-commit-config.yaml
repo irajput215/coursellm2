@@ -1,0 +1,61 @@
+# Local equivalent of the fast CI gates.
+#
+# `backend.yml` calls the Makefile targets directly rather than this file, so CI
+# and pre-commit cannot silently diverge: both bottom out in the same
+# `apps/api/pyproject.toml` / root `pyproject.toml` ruff and mypy configuration,
+# and in `scripts/scan_secrets.sh`.
+#
+# Every hook here is **check-only** on purpose. `make lint` is
+# `ruff check` plus `ruff format --check`, and `make typecheck` is `mypy`; none of
+# them rewrites the tree. Matching that means `pre-commit run --all-files` never
+# mutates a file, so it is safe to run on a dirty worktree or in CI.
+#
+#   pip install pre-commit      # or: pipx install pre-commit
+#   pre-commit install
+#   pre-commit run --all-files
+#
+# The mypy hook expects the project virtualenv to exist (`make install`); it
+# deliberately uses that venv rather than an isolated one so the pydantic plugin
+# and the project's dependencies are the ones being type-checked.
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+
+  # Pinned to the ruff version installed in the project virtualenv
+  # (`ruff 0.16.8`), so a local run and a CI run agree.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.8
+    hooks:
+      - id: ruff-check
+      - id: ruff-format
+        # ruff-pre-commit's default `types_or` includes Markdown so it can
+        # format Python code fences. `make lint` does not, and formatting prose
+        # examples is neither wanted nor checked in CI, so restrict the hook to
+        # the same surface the gate covers.
+        types_or: [python, pyi]
+        args: [--check]
+
+  - repo: local
+    hooks:
+      - id: secrets-scan
+        name: repository secret scan
+        description: fail if a secret-shaped value is present in a tracked file
+        entry: bash scripts/scan_secrets.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: mypy-src
+        name: mypy (apps/api/src)
+        description: strict type-check of the application source
+        entry: bash -c 'cd apps/api && ../../.venv/bin/mypy src'
+        language: system
+        pass_filenames: false
+        files: ^apps/api/src/

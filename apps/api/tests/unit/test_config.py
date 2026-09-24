@@ -80,10 +80,21 @@ class TestProductionGuards:
             _settings(environment=Environment.PROD, debug=True, secret_key="x" * 64)
 
     def test_prod_refuses_wildcard_cors(self) -> None:
-        """Wildcard origins are unsafe with credentials and invalid per spec."""
+        """Wildcard origins are unsafe with credentials and invalid per spec.
+
+        ``debug=False`` is passed explicitly rather than relying on the default.
+        Importing ``coursellm.api.app`` transitively imports ``litellm``, which
+        calls ``load_dotenv()`` at import time and exports the developer's ``.env``
+        into ``os.environ``. With a local ``DEBUG=true`` the debug guard therefore
+        fired before the CORS guard and this test failed with the wrong message on
+        any machine that had a ``.env``, while passing in CI because CI has none.
+        A test that only passes in CI is not testing the code, it is testing the
+        absence of a file.
+        """
         with pytest.raises(ValueError, match="CORS"):
             _settings(
                 environment=Environment.PROD,
+                debug=False,
                 secret_key="x" * 64,
                 cors_allowed_origins="https://app.example.com,*",
             )

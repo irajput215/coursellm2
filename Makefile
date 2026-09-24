@@ -234,11 +234,18 @@ eval: ## Run the RAG evaluation suite and write a report artefact
 eval-retrieval: ## Retrieval-only metrics (no LLM required)
 	$(PY) -m evals.runners.run_retrieval_eval --output evals/reports/retrieval.json
 
+# Which report `eval-gate` compares. The default is the full-RAG artefact written
+# by `make eval`. CI overrides it with `evals/reports/retrieval.json`, the report
+# `make eval-retrieval` writes, because the committed baseline is a retrieval run
+# and the retrieval half needs no provider key. Without the override the gate
+# would compare a stale, gitignored `latest.json` and grade nothing.
+EVAL_CURRENT ?= evals/reports/latest.json
+
 .PHONY: eval-gate
-eval-gate: ## Compare the latest report against the committed baseline; non-zero on regression
+eval-gate: ## Compare an eval report against the committed baseline; non-zero on regression
 	$(PY) -m evals.runners.check_regression \
-		--baseline $(API_DIR)/../../evals/reports/baseline.json \
-		--current evals/reports/latest.json
+		--baseline evals/reports/baseline.json \
+		--current $(EVAL_CURRENT)
 
 # ---------------------------------------------------------------------------
 # Infrastructure
@@ -266,6 +273,11 @@ tf-plan: ## Plan the dev environment (never applies)
 .PHONY: secrets-scan
 secrets-scan: ## Fail if a secret-shaped value is present in tracked files
 	bash scripts/scan_secrets.sh
+
+.PHONY: audit-deps
+audit-deps: ## Audit the installed environment against known dependency advisories
+	$(PIP) install --quiet pip-audit
+	$(VENV)/bin/pip-audit
 
 # ---------------------------------------------------------------------------
 # Composite gates

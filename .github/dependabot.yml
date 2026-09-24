@@ -1,0 +1,109 @@
+# Dependabot policy
+#
+# The rules below are deliberate, not defaults:
+#
+# * **Weekly, not daily.** The project has a small dependency surface and a
+#   human review budget; a daily stream of single-package PRs trains reviewers
+#   to rubber-stamp them.
+# * **Grouped per ecosystem.** Patches and minors arrive as one PR per
+#   ecosystem so the "boring" updates move together and are cheap to review. A
+#   group that fails CI is still attributable: the PR body lists every bump.
+# * **Every Dependabot PR must pass CI unmodified.** `backend.yml`,
+#   `integration.yml`, `security.yml` and `frontend.yml` run on it like any
+#   other PR. `security.yml`'s weekly `pip-audit` job is the backstop for
+#   advisories that would otherwise wait for a bump.
+# * **Major bumps are reviewed as code, not merged as config.** They still open
+#   a PR (pinning in the workflows and manifests is what Dependabot maintains),
+#   but the reviewer is expected to read the changelog; no auto-merge is
+#   configured anywhere.
+# * **Container bases stay digest-pinned.** `docker/*.Dockerfile` pins each base
+#   by tag and multi-architecture digest (`docs/architecture/deployment.md`
+#   §12). Dependabot keeps those pins current; `docker.yml` re-builds both
+#   images on the resulting PR and never pushes.
+
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+    labels:
+      - dependencies
+      - ci
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  - package-ecosystem: pip
+    directory: /apps/api
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    labels:
+      - dependencies
+      - python
+    groups:
+      python:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /apps/web
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    labels:
+      - dependencies
+      - frontend
+    groups:
+      npm:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directory: /docker
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: UTC
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "deps"
+    labels:
+      - dependencies
+      - docker
+    groups:
+      docker-images:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: UTC
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "deps"
+    labels:
+      - dependencies
+      - docker
+    groups:
+      compose-images:
+        patterns: ["*"]
