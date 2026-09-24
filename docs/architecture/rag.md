@@ -271,7 +271,8 @@ def rrf(rank_lists: list[list[str]], k: int = 60) -> dict[str, float]:
     return scores
 ```
 
-Replace by the actual implementation in `apps/api/src/coursellm/rag/fusion/rrf.py`.
+Implemented in `apps/api/src/coursellm/rag/fusion/rrf.py`; `k` defaults to 60 and is
+configurable through `RRF_K`.
 
 **Why RRF instead of a weighted score sum.** The prototype normalised both result sets
 with min–max scaling and combined them as `0.7 * semantic + 0.3 * keyword`. That has
