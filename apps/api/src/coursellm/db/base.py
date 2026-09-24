@@ -154,4 +154,13 @@ TENANT_SCOPED_TABLES: frozenset[str] = frozenset(
 # the hierarchy: a policy on it would make tenant creation impossible, so access
 # is restricted by the repository layer instead. This set is asserted by a test,
 # because an accidental addition here would silently disable isolation.
-GLOBAL_TABLES: frozenset[str] = frozenset({"tenants", "alembic_version"})
+#
+# ``resources`` and ``resource_concepts`` are the curated public catalogue: it is
+# identical for every tenant, so it is global rather than duplicated per tenant,
+# and it carries no ``tenant_id``. ``resource_concepts`` joins a global resource
+# to a ``concepts.slug`` by value, so it is global too. Both directions — present
+# in ``GLOBAL_TABLES`` and absent from ``TENANT_SCOPED_TABLES`` — are asserted by
+# ``tests/security/test_tenancy_boundary.py``.
+GLOBAL_TABLES: frozenset[str] = frozenset(
+    {"tenants", "alembic_version", "resources", "resource_concepts"}
+)

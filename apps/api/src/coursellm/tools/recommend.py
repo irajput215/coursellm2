@@ -1,10 +1,12 @@
-"""``get_recommendations`` — rank catalogue resources against knowledge gaps.
+"""``get_recommendations`` — rank the curated catalogue against knowledge gaps.
 
-The ``resources`` catalogue is PR 12 and has no table in this schema revision, so
-the handler returns an empty typed list with
-``degraded=["tool_unavailable"]``. Every recommendation is specified to carry
-provenance back to a catalogue row; returning nothing is the only honest option
-until that row exists.
+The handler is a thin adapter. It resolves nothing itself: scope comes from
+:class:`~coursellm.tools.registry.ToolContext` (never from arguments), and the
+work is the :func:`coursellm.recommend.service.recommend_for_user` use case, so
+the tool, the HTTP endpoint and the recommendation agent all rank the catalogue
+the same way. Every returned item is a ``resources`` row: a resource that is not
+in the catalogue cannot be returned, which is the guarantee that this tool never
+invents a book, a course or a URL.
 """
 
 from __future__ import annotations
@@ -14,6 +16,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from coursellm.db.tenancy import TenantScope
+from coursellm.recommend.service import recommend_for_user
 from coursellm.tools.registry import (
     Permission,
     ToolContext,
@@ -22,6 +26,10 @@ from coursellm.tools.registry import (
 )
 
 Difficulty = Literal["easy", "medium", "hard"]
+
+#: The tool's coarse difficulty knob mapped to the 1-5 scale stored on a resource.
+#: ``hard`` intentionally reaches the top of the scale; there is no "unlimited".
+DIFFICULTY_MAX_BY_LABEL: dict[str, int] = {"easy": 2, "medium": 3, "hard": 5}
 
 
 class GetRecommendationsArgs(BaseModel):
@@ -54,11 +62,72 @@ class RecommendationsResult(BaseModel):
     degraded: list[str] = Field(default_factory=list)
 
 
+def _parse_concept_ids(raw: list[str]) -> tuple[list[uuid.UUID], int]:
+    """Parse concept ids, returning the valid ones and how many were malformed."""
+    parsed: list[uuid.UUID] = []
+    invalid = 0
+    for value in raw:
+        try:
+            parsed.append(uuid.UUID(value))
+        except (ValueError, AttributeError, TypeError):
+            invalid += 1
+    return parsed, invalid
+
+
 async def get_recommendations(
     args: GetRecommendationsArgs, ctx: ToolContext
 ) -> RecommendationsResult:
-    """Return an empty catalogue ranking; the catalogue lands in PR 12."""
-    return RecommendationsResult(recommendations=[], degraded=["tool_unavailable"])
+    """Rank the catalogue against the caller's gaps, or degrade honestly.
+
+    A tool call without a user or a database session has nothing to personalise
+    against or read from, and returns an empty list with a named degradation
+    rather than a plausible-looking non-answer.
+    """
+    if ctx.user_id is None:
+        return RecommendationsResult(recommendations=[], degraded=["no_user_context"])
+    if ctx.session is None:
+        return RecommendationsResult(recommendations=[], degraded=["tool_unavailable"])
+
+    concept_ids, invalid = _parse_concept_ids(args.concept_ids)
+    difficulty_max = (
+        None if args.difficulty_max is None else DIFFICULTY_MAX_BY_LABEL[args.difficulty_max]
+    )
+    result = await recommend_for_user(
+        ctx.session,
+        TenantScope(tenant_id=ctx.tenant_id),
+        ctx.settings,
+        user_id=ctx.user_id,
+        course_id=args.course_id,
+        concept_ids=concept_ids or None,
+        limit=args.limit,
+        difficulty_max=difficulty_max,
+    )
+
+    degraded = list(result.degraded)
+    if invalid:
+        degraded.append("invalid_concept_ids")
+
+    recommendations = [
+        Recommendation(
+            resource_id=str(item.resource.id),
+            title=item.resource.title,
+            url=item.resource.url,
+            source_type=item.resource.resource_type.value,
+            coverage=item.score.contributions.coverage,
+            match_reasons=[item.explanation.summary, item.explanation.next_step],
+            provenance={
+                "provider": item.resource.provider,
+                "publisher": item.resource.publisher,
+                "year": item.resource.year,
+                "trust": item.resource.trust.value,
+                "is_verified": item.resource.is_verified,
+                "covered_concept_slugs": list(item.score.covered_slugs),
+                "contributions": item.score.contributions.as_dict(),
+            },
+        )
+        for item in result.recommendations
+    ]
+    return RecommendationsResult(recommendations=recommendations, degraded=degraded)
 
 
 def register(registry: ToolRegistry) -> None:
@@ -79,6 +148,7 @@ def register(registry: ToolRegistry) -> None:
 
 
 __all__ = [
+    "DIFFICULTY_MAX_BY_LABEL",
     "GetRecommendationsArgs",
     "Recommendation",
     "RecommendationsResult",
