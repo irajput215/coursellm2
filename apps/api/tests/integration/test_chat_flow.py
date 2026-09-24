@@ -1,4 +1,9 @@
-"""The full chat flow against real PostgreSQL, with a scripted gateway.
+"""The full direct RAG chat flow against real PostgreSQL, with a scripted gateway.
+
+The agent graph is the default engine for ``/chat``; this module is specifically
+about the direct path, so every request names ``"engine": "rag"`` explicitly.
+``test_chat_agent_path.py`` covers the agent engine and the equivalence of the
+two engines' citations.
 
 Nothing here mocks ``litellm``. :class:`ScriptedGateway` subclasses the real
 :class:`~coursellm.llm.gateway.LiteLLMGateway` and overrides only the provider
@@ -220,7 +225,7 @@ async def test_in_corpus_question_returns_verified_citations_and_persists_the_tu
 
     response = await chat.post(
         "/api/v1/chat",
-        json={"question": QUESTION, "course_id": str(seeded.tenant_a.course_id)},
+        json={"question": QUESTION, "course_id": str(seeded.tenant_a.course_id), "engine": "rag"},
         headers=_auth(token),
     )
 
@@ -266,6 +271,7 @@ async def test_out_of_corpus_question_refuses_without_calling_the_model(
         json={
             "question": "Explain the role of quantum chromodynamics in photosynthesis.",
             "course_id": str(seeded.tenant_a.course_id),
+            "engine": "rag",
         },
         headers=_auth(token),
     )
@@ -289,7 +295,11 @@ async def test_conversations_are_not_visible_to_another_tenant(
     token_a = await _login(chat, seeded.tenant_a.email)
     created = await chat.post(
         "/api/v1/chat",
-        json={"question": "Hello there", "course_id": str(seeded.tenant_a.course_id)},
+        json={
+            "question": "Hello there",
+            "course_id": str(seeded.tenant_a.course_id),
+            "engine": "rag",
+        },
         headers=_auth(token_a),
     )
     assert created.status_code == 200, created.text
@@ -339,7 +349,7 @@ async def test_streaming_endpoint_emits_tokens_citations_and_done(
 
     response = await chat.post(
         "/api/v1/chat/stream",
-        json={"question": QUESTION, "course_id": str(seeded.tenant_a.course_id)},
+        json={"question": QUESTION, "course_id": str(seeded.tenant_a.course_id), "engine": "rag"},
         headers=_auth(token),
     )
 

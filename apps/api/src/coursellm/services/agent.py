@@ -19,6 +19,7 @@ from __future__ import annotations
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 from langchain_core.messages import AIMessage, HumanMessage
@@ -109,7 +110,17 @@ async def run_turn(
     )
     request_id = uuid.uuid4()
     model = resolve_model(settings, ModelTask.TUTORING)
+    # Both messages are inserted in ONE transaction, and PostgreSQL's ``now()``
+    # returns the *transaction* timestamp rather than the statement's. The server
+    # default would therefore give the user and assistant rows identical
+    # ``created_at`` values, and ``GET /chat/conversations/{id}`` orders by
+    # ``(created_at, id)`` — where ``id`` is a random UUID. The transcript could
+    # render the answer before the question. Pinning distinct timestamps makes the
+    # order deterministic without a schema change.
+    turn_started_at = datetime.now(UTC)
+
     user_message = Message(
+        created_at=turn_started_at,
         tenant_id=context.tenant_id,
         conversation_id=conversation.id,
         role=MessageRole.USER,
@@ -171,6 +182,8 @@ async def run_turn(
     recorded_models = evaluation_metadata.get("models") or {}
     recorded_prompts = evaluation_metadata.get("prompt_versions") or {}
     assistant_message = Message(
+        # Strictly after the question, so the pair always sorts correctly.
+        created_at=turn_started_at + timedelta(microseconds=1),
         tenant_id=context.tenant_id,
         conversation_id=conversation.id,
         role=MessageRole.ASSISTANT,

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -21,6 +22,11 @@ from coursellm.db.models.conversation import MessageRole
 # The service enforces ``settings.max_query_chars``; this bound is a transport
 # guard so that a pathological body is rejected before it reaches the domain.
 _MAX_QUESTION_CHARS = 100_000
+
+#: ``agent`` runs the bounded LangGraph tutor (the default); ``rag`` runs the
+#: direct retrieval-augmented path. Both share retrieval, generation, citations
+#: and persistence, so the choice changes routing, not grounding.
+Engine = Literal["agent", "rag"]
 
 
 class ChatRequest(BaseModel):
@@ -32,6 +38,14 @@ class ChatRequest(BaseModel):
     )
     conversation_id: uuid.UUID | None = Field(
         default=None, description="Continue an existing conversation owned by the caller."
+    )
+    engine: Engine = Field(
+        default="agent",
+        description=(
+            "Which engine answers the turn. 'agent' (default) runs the bounded "
+            "LangGraph tutor and records the routed intent; 'rag' runs the direct "
+            "retrieval-augmented path. Both produce equivalent grounded answers."
+        ),
     )
 
 
@@ -66,6 +80,12 @@ class ChatResponse(BaseModel):
     degraded: list[str]
     conversation_id: uuid.UUID
     usage: UsageSummary | None = None
+    #: The intent the router recorded for the turn. The direct path always
+    #: reports ``"tutor"`` because it has no routing decision to make.
+    intent: str = "tutor"
+    #: The active trace id, so a stored answer can be joined to the trace that
+    #: produced it. ``None`` when tracing is disabled.
+    trace_id: str | None = None
 
 
 class ConversationSummary(BaseModel):
@@ -106,6 +126,7 @@ __all__ = [
     "CitationResponse",
     "ConversationDetailResponse",
     "ConversationSummary",
+    "Engine",
     "MessageResponse",
     "UsageSummary",
 ]

@@ -5,6 +5,11 @@ module opens a socket or depends on a collector. The request path is the real
 one — scripted provider call, real retry/validation/usage code, real PostgreSQL —
 so a span hierarchy assertion is a statement about production wiring rather than
 about a hand-built tree.
+
+The assertions below describe the *direct* engine's layer spans, so requests name
+``"engine": "rag"`` explicitly now that the agent graph is the ``/chat`` default;
+the agent hierarchy (``agent_graph`` with node children) is asserted in
+``test_chat_agent_path.py``.
 """
 
 from __future__ import annotations
@@ -225,7 +230,11 @@ async def _ask(case: TracedChat) -> dict[str, Any]:
     token = await _login(case.client, case.seeded.tenant_a.email)
     response = await case.client.post(
         "/api/v1/chat",
-        json={"question": QUESTION, "course_id": str(case.seeded.tenant_a.course_id)},
+        json={
+            "question": QUESTION,
+            "course_id": str(case.seeded.tenant_a.course_id),
+            "engine": "rag",
+        },
         headers={"Authorization": f"Bearer {token}"},
     )
     assert response.status_code == 200, response.text
@@ -440,6 +449,7 @@ class TestTracingDisabled:
                     json={
                         "question": QUESTION,
                         "course_id": str(seeded.tenant_a.course_id),
+                        "engine": "rag",
                     },
                     headers={"Authorization": f"Bearer {token}"},
                 )

@@ -59,7 +59,10 @@ _ERROR_DETAIL = (
     description=(
         "Retrieves evidence from the caller's own course material, answers with "
         "verified inline citations, and refuses explicitly when the evidence does "
-        "not support an answer. The turn is persisted either way."
+        "not support an answer. The turn is persisted either way. ``engine`` "
+        "selects the bounded agent graph (the default) or the direct "
+        "retrieval-augmented path; both share the grounding, citation and refusal "
+        "machinery and produce equivalent answers for a simple factual question."
     ),
 )
 async def chat(
@@ -77,6 +80,7 @@ async def chat(
         question=payload.question,
         course_id=payload.course_id,
         conversation_id=payload.conversation_id,
+        engine=payload.engine,
     )
     return ChatResponse(
         answer=result.answer,
@@ -85,6 +89,8 @@ async def chat(
         degraded=result.degraded,
         conversation_id=result.conversation_id,
         usage=UsageSummary.model_validate(result.usage) if result.usage is not None else None,
+        intent=result.intent,
+        trace_id=result.trace_id,
     )
 
 
@@ -96,7 +102,8 @@ async def chat(
         "Server-sent events. ``token`` events carry partial text as it is "
         "produced; the final ``citations`` event carries the verified citation "
         "list; ``done`` ends the stream. An ``error`` event is emitted instead if "
-        "the stream fails."
+        "the stream fails. With ``engine='agent'`` (the default) the graph runs "
+        "the turn first and its answer is emitted as a single ``token`` event."
     ),
 )
 async def stream_chat(
@@ -106,6 +113,22 @@ async def stream_chat(
     session: TenantSessionDep,
     gateway: LLMGatewayDep,
 ) -> EventSourceResponse:
+    if payload.engine == "agent":
+        # The graph composes the whole answer (and persists the turn) before the
+        # response starts, so the SSE contract is preserved by emitting that
+        # answer as one token event followed by the authoritative citations.
+        result = await chat_service.ask(
+            session,
+            settings,
+            gateway,
+            context,
+            question=payload.question,
+            course_id=payload.course_id,
+            conversation_id=payload.conversation_id,
+            engine="agent",
+        )
+        return EventSourceResponse(_agent_events(result))
+
     prepared = await chat_service.prepare_turn(
         session,
         settings,
@@ -154,6 +177,20 @@ async def stream_chat(
             yield {"event": "error", "data": _encode({"detail": _ERROR_DETAIL})}
 
     return EventSourceResponse(events())
+
+
+async def _agent_events(result: chat_service.ChatAnswer) -> AsyncIterator[dict[str, str]]:
+    """Emit the graph's completed answer as the documented SSE sequence."""
+    try:
+        yield {"event": "token", "data": _encode({"text": result.answer})}
+        yield {
+            "event": "citations",
+            "data": _encode([citation.model_dump(mode="json") for citation in result.citations]),
+        }
+        yield {"event": "done", "data": "{}"}
+    except Exception:
+        logger.exception("chat_stream_failed")
+        yield {"event": "error", "data": _encode({"detail": _ERROR_DETAIL})}
 
 
 @router.get(
