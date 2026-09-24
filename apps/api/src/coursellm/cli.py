@@ -40,6 +40,44 @@ def _cmd_health(_: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_db_inspect(_: argparse.Namespace) -> int:
+    """Report the database identity and whether RLS is actually enforced.
+
+    Worth a dedicated command because "RLS is enabled" and "RLS is enforced for
+    the role the application connects as" are different statements, and only the
+    second one protects anything. A superuser, or any role holding BYPASSRLS,
+    ignores every policy silently.
+    """
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from coursellm.db.session import get_engine, rls_enforcement_status
+
+    async def _run() -> int:
+        settings = get_settings()
+        engine = await get_engine(settings)
+        async with engine.connect() as conn:
+            status = await rls_enforcement_status(AsyncSession(bind=conn))
+
+        print(f"connected as     : {status['role']}")
+        print(f"superuser        : {status['is_superuser']}")
+        print(f"bypasses RLS     : {status['bypasses_rls']}")
+        if status["enforced"]:
+            print("tenant isolation : ENFORCED by Row-Level Security")
+            return 0
+
+        print("tenant isolation : NOT ENFORCED for this role")
+        print(
+            "  Superusers and roles with BYPASSRLS ignore Row-Level Security.\n"
+            "  Repository-level scoping still applies, but the database backstop\n"
+            "  does not. Run `make db-bootstrap` and connect as coursellm_app."
+        )
+        return 1
+
+    return asyncio.run(_run())
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="coursellm", description="CourseLLM operations.")
     parser.add_argument("--version", action="version", version=f"coursellm {__version__}")
@@ -51,6 +89,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("health", help="Print version and configuration hashes.").set_defaults(
         func=_cmd_health
     )
+    sub.add_parser(
+        "db-inspect",
+        help="Report the database role and whether Row-Level Security is enforced for it.",
+    ).set_defaults(func=_cmd_db_inspect)
     return parser
 
 

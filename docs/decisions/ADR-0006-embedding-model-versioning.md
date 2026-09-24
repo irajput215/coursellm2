@@ -140,7 +140,7 @@ sequenceDiagram
 
 ## How this is verified
 
-- `tests/test_embedding_versioning.py` asserts retrieval returns only rows for the
+- `apps/api/tests/integration/test_embedding_versioning.py` asserts retrieval returns only rows for the
   configured model and dimension, and that a query vector from model B cannot match
   a stored vector from model A.
 - A migration integration test loads a synthetic two-model, two-dimension corpus,

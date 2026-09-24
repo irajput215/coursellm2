@@ -70,11 +70,88 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             impact="Generation will degrade to extractive answers from retrieved context.",
         )
 
+    _register_dependency_checks(settings)
+    await _verify_tenant_isolation(settings)
+
     try:
         yield
     finally:
         logger.info("application_stopping", service=settings.app_name)
         await _shutdown()
+
+
+def _register_dependency_checks(settings: Settings) -> None:
+    """Attach readiness probes for infrastructure the API cannot serve without.
+
+    Imported lazily and guarded so the application can still start — and report
+    itself unready — when an optional subsystem is unavailable, rather than
+    failing at import with a traceback naming an internal module.
+    """
+    try:
+        from coursellm.db.session import check_connection
+
+        health.register_check(
+            "database",
+            lambda: check_connection(settings),
+            critical=True,
+            detail="PostgreSQL reachable and queryable",
+        )
+    except ImportError:  # pragma: no cover - database layer absent
+        logger.warning("database_check_not_registered")
+
+
+async def _verify_tenant_isolation(settings: Settings) -> None:
+    """Confirm Row-Level Security is actually enforced for this role.
+
+    A startup check rather than a documentation note, because the failure it
+    detects is invisible. A superuser — which is what a local PostgreSQL install
+    usually provides — ignores every RLS policy without warning, so the system
+    looks isolated while returning other tenants' rows.
+
+    * In production, a role that can bypass RLS is a startup failure.
+    * Elsewhere it is a loud warning, so the hazard is visible during development
+      instead of discovered in production.
+    """
+    try:
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        from coursellm.db.session import get_engine, rls_enforcement_status
+
+        engine = await get_engine(settings)
+        async with engine.connect() as conn:
+            status = await rls_enforcement_status(AsyncSession(bind=conn))
+    except Exception as exc:
+        logger.warning(
+            "tenant_isolation_check_skipped",
+            reason=f"{type(exc).__name__}: {exc}",
+            impact="Readiness will report the database as unavailable.",
+        )
+        return
+
+    if status["enforced"]:
+        logger.info("tenant_isolation_enforced", role=status["role"])
+        return
+
+    if settings.is_production:
+        msg = (
+            f"The database role {status['role']!r} bypasses Row-Level Security "
+            f"(superuser={status['is_superuser']}, bypassrls={status['bypasses_rls']}). "
+            "Refusing to start in prod: tenant isolation would rest on application "
+            "code alone. Connect as a role with NOSUPERUSER NOBYPASSRLS."
+        )
+        raise RuntimeError(msg)
+
+    logger.warning(
+        "tenant_isolation_not_enforced",
+        role=status["role"],
+        is_superuser=status["is_superuser"],
+        bypasses_rls=status["bypasses_rls"],
+        impact=(
+            "Row-Level Security is ignored for this role, so isolation rests on "
+            "repository scoping alone. Run `make db-bootstrap` and connect as the "
+            "coursellm_app role to exercise the database backstop locally."
+        ),
+    )
 
 
 async def _shutdown() -> None:
@@ -101,10 +178,14 @@ async def _shutdown() -> None:
 def _build_api_router() -> APIRouter:
     """Assemble the versioned API surface.
 
-    Domain routers are added here as they are implemented. Keeping the
-    composition in one function makes the API surface auditable at a glance.
+    Domain routers are added here as they are implemented, so the public surface
+    is auditable in one place rather than inferred from filesystem discovery.
     """
+    from coursellm.api.routers import auth, courses
+
     router = APIRouter()
+    router.include_router(auth.router)
+    router.include_router(courses.router)
     return router
 
 
@@ -123,6 +204,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         openapi_url=f"{settings.api_v1_prefix}/openapi.json",
         openapi_tags=[
             {"name": "health", "description": "Liveness and readiness probes."},
+            {"name": "auth", "description": "Registration, login and session lifecycle."},
+            {"name": "courses", "description": "Courses and the documents within them."},
         ],
     )
 

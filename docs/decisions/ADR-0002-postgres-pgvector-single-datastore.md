@@ -123,7 +123,7 @@ and switch back-ends behind the same interface.
 
 - Retrieval SQL tests assert ANN queries apply tenant and model predicates in the
   scan, and `EXPLAIN` checks assert the HNSW and composite indexes are used.
-- `tests/test_tenant_isolation.py` runs an adversarial corpus in which the
+- `apps/api/tests/integration/test_tenant_isolation.py` runs an adversarial corpus in which the
   overwhelming majority of chunks belong to a decoy tenant and asserts `LIMIT k`
   returns `k` rows for the requesting tenant.
 - Recall@20, Recall@10, and MRR per access pattern are produced by `evals/` on the

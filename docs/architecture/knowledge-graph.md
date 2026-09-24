@@ -80,7 +80,7 @@ reversed.
 | Operational surface | One datastore: one backup, one HA configuration, one connection pool, one credential rotation, one migration tool, one RLS model, one restore drill | A second stateful service with its own backup, HA, auth and upgrade path |
 | Tenancy | `tenant_id` on every row, enforced by the repository contract **and** Postgres RLS, exactly as for chunks | Row- or label-level multi-tenancy must be reimplemented; RLS does not carry over |
 | Query capability | `WITH RECURSIVE` expresses closure, depth limiting, path accumulation, cycle detection and gap detection. All four queries in §4 are recursive CTEs | Cypher is more concise for variable-length patterns, but concision is not the constraint |
-| Traversal latency in the request path | Bounded by the depth cap and `(tenant_id, source_concept_id)` index; the graph node has a 150 ms budget in `agents.md` §4.2 | Faster for deep variable-length traversal on large graphs; irrelevant at depth ≤ 3 over thousands of edges |
+| Traversal latency in the request path | Bounded by the depth cap and `(tenant_id, source_concept_id)` index; the graph node has a 150 ms budget in `agent-architecture.md` §4.2 | Faster for deep variable-length traversal on large graphs; irrelevant at depth ≤ 3 over thousands of edges |
 | Backup / HA story | Already exists because the vectors are there | New |
 | Migrations | Alembic, same as every other table | Separate migration discipline |
 | New dependency | None | Justified only by a load-bearing job (`system.md` principle 6) |
@@ -1114,7 +1114,7 @@ the graph list and the semantic list both surface is rewarded by agreement, whic
 desired behaviour: it is both topically similar and structurally relevant.
 
 Each `RetrievedDocument` keeps `semantic_rank`, `lexical_rank` and `graph_rank`
-independently (`agents.md` §2), so evaluation can distinguish "the graph found the right
+independently (`agent-architecture.md` §2), so evaluation can distinguish "the graph found the right
 passage and fusion dropped it" from "the graph never produced it". Without per-list ranks
 that class of regression is invisible.
 

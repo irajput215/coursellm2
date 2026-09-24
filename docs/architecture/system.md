@@ -249,9 +249,9 @@ every model call.
 | Attribute | Mechanism | Where to verify |
 |-----------|-----------|-----------------|
 | Retrieval quality | Recall@k / MRR / context precision & recall on a golden set | `evals/`, CI gate |
-| Answer grounding | Faithfulness + citation coverage; refusal when evidence is absent | `evals/`, `tests/test_grounding.py` |
-| Tenancy isolation | RLS policies + repository contract + ANN pre-filtering | `tests/test_tenant_isolation.py` |
-| Injection resistance | Detector + delimitation + tool permission matrix | `tests/security/` |
+| Answer grounding | Faithfulness + citation coverage; refusal when evidence is absent | `evals/`, `apps/api/tests/integration/test_grounding.py` |
+| Tenancy isolation | RLS policies + repository contract + ANN pre-filtering | `apps/api/tests/integration/test_tenant_isolation.py` |
+| Injection resistance | Detector + delimitation + tool permission matrix | `apps/api/tests/security/` |
 | Latency | Per-layer spans, P50/P95 in `/api/v1/metrics` | `docs/architecture/observability.md` |
 | Cost | Token + cost accounting per request and per tenant | `llm_usage`, `/api/v1/evaluation/cost` |
 | Reproducibility | Config + model + prompt versions recorded on every eval run | `evals/reports/` |

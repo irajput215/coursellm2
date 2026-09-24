@@ -26,7 +26,7 @@
 | Tenant isolation boundary | `TenantContext` → repository → RLS | One broken predicate leaks another customer's entire corpus | Three independent layers (§7) |
 | Cost budget | LiteLLM spend tracking, `llm_usage`, Redis counters | An attacker with a free LLM endpoint can burn provider budget | Per-user/per-tenant limits, token caps, loop bounds (§11) |
 | Prompt and config versions | `prompts/`, `RETRIEVAL_CONFIG_VERSION` | Prompt exfiltration reveals the security posture itself | System-prompt exfiltration detection (§2); no secrets are ever placed in prompts (§10) |
-| Tool-permission policy | Tool registry + `docs/architecture/agents.md` | The matrix is the boundary between "agent decided" and "system permitted" | Structural, deny-by-default (§4, §5) |
+| Tool-permission policy | Tool registry + `docs/architecture/agent-architecture.md` | The matrix is the boundary between "agent decided" and "system permitted" | Structural, deny-by-default (§4, §5) |
 
 ### 1.2 Adversaries
 
@@ -303,7 +303,7 @@ predicate on the same tenant-scoped query that already exists, so it costs one b
 ## 4. Structural defenses checklist
 
 Every row names a control that exists as code position, not as prompt text. The tool
-permission matrix referenced here is specified in [`docs/architecture/agents.md`](./agents.md);
+permission matrix referenced here is specified in [`docs/architecture/agent-architecture.md`](./agent-architecture.md);
 the security properties below are enforced by the tool registry and the repository layer
 regardless of how that matrix is configured.
 
@@ -313,7 +313,7 @@ regardless of how that matrix is configured.
 | System-prompt exfiltration | System prompt is static and contains no secrets; exfiltration class detected and logged | `prompts/**`, safety layer |
 | Indirect injection via retrieved passage | Delimited evidence region; reserved-marker neutralisation; report-don't-obey | Context assembly + system prompt |
 | Early fence escape (`</untrusted_evidence>`) | Marker stripping at ingest and at assembly | Ingestion normaliser, assembler |
-| Agent invokes a tool it is not permitted to use | Tool permission matrix, deny by default | Tool registry ([agents.md](./agents.md)) |
+| Agent invokes a tool it is not permitted to use | Tool permission matrix, deny by default | Tool registry ([agent-architecture.md](./agent-architecture.md)) |
 | Agent invokes a tool outside its role's scope | Least privilege per agent node: each node declares the tool set it may call | Tool registry |
 | SQL injection / data exfiltration | There is **no raw SQL tool**. Retrieval is a typed, parameterised tool with a fixed query shape | `search_documents`, `search_knowledge_graph` |
 | Filesystem read/write | There is **no filesystem tool** exposed to any agent | Tool registry |
@@ -471,8 +471,8 @@ ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE documents FORCE ROW LEVEL SECURITY;
 
 CREATE POLICY tenant_isolation ON documents
-  USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
-  WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 ```
 
 **Why `FORCE ROW LEVEL SECURITY`.** Table owners bypass RLS by default. Without `FORCE`,
@@ -511,7 +511,7 @@ incorrectly, and it is a hazard precisely because the code looks correct in revi
    fails closed per the `NULL` semantics above.
 3. **Pool discipline.** `asyncpg` pools are per-process and bounded; the pool is never
    handed a connection across an `await` that outlives the request scope.
-4. **RLS is tested adversarially, not incidentally.** `tests/test_tenant_isolation.py`
+4. **RLS is tested adversarially, not incidentally.** `apps/api/tests/integration/test_tenant_isolation.py`
    runs with a decoy tenant owning 99% of chunks and asserts that ANN retrieval returns
    *k rows belonging to the tenant*, not *k rows of which some belong to the tenant*
    ([rag.md](./rag.md) §3), and that an unset GUC returns zero rows.
@@ -676,7 +676,7 @@ repository; rows marked *validated* correspond to an existing test path.
 | 4 | Delimiter escape | Query or passage containing `</untrusted_evidence>` | Marker absent from the assembled prompt; evidence region intact | specified |
 | 5 | Indirect injection, PDF fixture | Committed PDF with an invisible text layer instructing tool use | Ingestion sets `quarantine_state`; passage absent from retrieval; no tool call is emitted | specified |
 | 6 | Indirect injection, slides fixture | PPTX speaker note instructing credential disclosure | Note is either excluded from evidence or reported; answer contains no credential | specified |
-| 7 | Cross-tenant retrieval | Adversarial corpus where a decoy tenant owns 99% of `chunk_embeddings` | `LIMIT k` returns `k` rows of the requesting tenant; zero decoy rows at any `k` | validated — `tests/test_tenant_isolation.py` |
+| 7 | Cross-tenant retrieval | Adversarial corpus where a decoy tenant owns 99% of `chunk_embeddings` | `LIMIT k` returns `k` rows of the requesting tenant; zero decoy rows at any `k` | validated — `apps/api/tests/integration/test_tenant_isolation.py` |
 | 8 | RLS fail-closed | Query with `app.tenant_id` unset | Zero rows returned; no exception is swallowed into a permissive path | specified |
 | 9 | Pool GUC bleed | Tenant A request, then tenant B request on the same pooled connection | Tenant B sees only tenant B rows; `SET LOCAL` is asserted to revert at transaction end | specified |
 | 10 | Tool-permission violation | Prompt injection that instructs a node to call a tool outside its set | Tool registry raises; the call is not executed; a policy-violation event is recorded | specified |

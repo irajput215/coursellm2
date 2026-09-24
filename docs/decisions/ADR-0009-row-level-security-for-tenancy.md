@@ -125,7 +125,7 @@ selective filters, `hnsw.iterative_scan = strict_order` keeps the scan going unt
 
 ## How this is verified
 
-- `tests/test_tenant_isolation.py` runs against an **adversarial corpus** in which the
+- `apps/api/tests/integration/test_tenant_isolation.py` runs against an **adversarial corpus** in which the
   overwhelming majority of chunks belong to a decoy tenant, asserts ANN retrieval
   returns K rows for the requesting tenant, and asserts post-filtering would not. It
   also asserts a deliberately unscoped repository call still returns zero foreign rows

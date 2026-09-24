@@ -15,16 +15,25 @@ SRC         := $(API_DIR)/src
 PYTHONPATH  := $(SRC)
 
 # Local database used by `make db-reset` and integration tests.
+#
+# Two roles, mirroring production: <owner> owns the schema and runs migrations,
+# coursellm_app runs the application and cannot bypass Row-Level Security. See
+# scripts/bootstrap_db.sql for why that split is required rather than optional.
 DB_NAME     ?= coursellm_dev
 TEST_DB_NAME?= coursellm_test
 DB_HOST     ?= localhost
 DB_PORT     ?= 5432
 DB_USER     ?= $(shell whoami)
-DATABASE_URL ?= postgresql+asyncpg://$(DB_USER)@$(DB_HOST):$(DB_PORT)/$(DB_NAME)
-TEST_DATABASE_URL ?= postgresql+asyncpg://$(DB_USER)@$(DB_HOST):$(DB_PORT)/$(TEST_DB_NAME)
+APP_ROLE    ?= coursellm_app
+
+DATABASE_URL          ?= postgresql+asyncpg://$(APP_ROLE)@$(DB_HOST):$(DB_PORT)/$(DB_NAME)
+ALEMBIC_DATABASE_URL  ?= postgresql+asyncpg://$(DB_USER)@$(DB_HOST):$(DB_PORT)/$(DB_NAME)
+TEST_DATABASE_URL     ?= postgresql+asyncpg://$(APP_ROLE)@$(DB_HOST):$(DB_PORT)/$(TEST_DB_NAME)
+TEST_ALEMBIC_DATABASE_URL ?= postgresql+asyncpg://$(DB_USER)@$(DB_HOST):$(DB_PORT)/$(TEST_DB_NAME)
 
 export PYTHONPATH
 export DATABASE_URL
+export ALEMBIC_DATABASE_URL
 export ENVIRONMENT ?= local
 
 # ---------------------------------------------------------------------------
@@ -110,14 +119,14 @@ test-web: ## Frontend tests
 # Database
 # ---------------------------------------------------------------------------
 .PHONY: db-create
-db-create: ## Create the dev and test databases (and the vector extension)
+db-create: ## Create the dev and test databases with the vector extension
 	-createdb -h $(DB_HOST) -p $(DB_PORT) $(DB_NAME)
 	-createdb -h $(DB_HOST) -p $(DB_PORT) $(TEST_DB_NAME)
 	psql -h $(DB_HOST) -p $(DB_PORT) -d $(DB_NAME) -c 'CREATE EXTENSION IF NOT EXISTS vector;'
 	psql -h $(DB_HOST) -p $(DB_PORT) -d $(TEST_DB_NAME) -c 'CREATE EXTENSION IF NOT EXISTS vector;'
 
 .PHONY: migrate
-migrate: ## Apply all migrations
+migrate: ## Apply all migrations as the schema owner
 	cd $(API_DIR) && ../../$(VENV)/bin/alembic upgrade head
 
 .PHONY: downgrade
@@ -129,15 +138,44 @@ migration: ## Autogenerate a migration: make migration m="add table"
 	@test -n "$(m)" || (echo 'usage: make migration m="description"'; exit 1)
 	cd $(API_DIR) && ../../$(VENV)/bin/alembic revision --autogenerate -m "$(m)"
 
+.PHONY: migrate-test
+migrate-test: ## Apply all migrations to the test database as the schema owner
+	cd $(API_DIR) && ALEMBIC_DATABASE_URL="$(TEST_ALEMBIC_DATABASE_URL)" \
+		../../$(VENV)/bin/alembic upgrade head
+
+.PHONY: db-bootstrap
+db-bootstrap: ## Create the restricted app role and grant it privileges (after migrate)
+	psql -h $(DB_HOST) -p $(DB_PORT) -d $(DB_NAME) -f scripts/bootstrap_db.sql
+	psql -h $(DB_HOST) -p $(DB_PORT) -d $(TEST_DB_NAME) -f scripts/bootstrap_db.sql
+
+.PHONY: db-setup
+db-setup: db-create migrate migrate-test db-bootstrap ## Full local database setup, in dependency order
+	@echo
+	@echo "Application role: $(APP_ROLE) (NOSUPERUSER NOBYPASSRLS, so RLS applies)"
+	@echo "Migrations run as: $(DB_USER)"
+	@echo "Ready. Run 'make api' and 'make test-integration'."
+
 .PHONY: db-reset
 db-reset: ## Drop and rebuild the dev database from migrations
 	-dropdb -h $(DB_HOST) -p $(DB_PORT) --if-exists $(DB_NAME)
 	make db-create
 	make migrate
+	make db-bootstrap
+
+.PHONY: db-reset-test
+db-reset-test: ## Drop and rebuild the test database from migrations
+	-dropdb -h $(DB_HOST) -p $(DB_PORT) --if-exists $(TEST_DB_NAME)
+	make db-create
+	make migrate-test
+	make db-bootstrap
 
 .PHONY: db-heads
 db-heads: ## Show the current migration head(s)
 	cd $(API_DIR) && ../../$(VENV)/bin/alembic heads
+
+.PHONY: db-inspect
+db-inspect: ## Report RLS enforcement and connection identity for the app role
+	cd $(API_DIR) && ../../$(VENV)/bin/python -m coursellm.cli db-inspect
 
 # ---------------------------------------------------------------------------
 # Run
