@@ -24,6 +24,14 @@ from coursellm.db.models.conversation import (
     Message,
     MessageRole,
 )
+from coursellm.db.models.graph import (
+    AliasSource,
+    Concept,
+    ConceptAlias,
+    ConceptEdge,
+    ExtractionRunStatus,
+    GraphExtractionRun,
+)
 from coursellm.db.models.identity import (
     RefreshTokenRevocation,
     Tenant,
@@ -35,13 +43,19 @@ from coursellm.db.models.usage import LLMUsage
 
 __all__ = [
     "EMBEDDING_DIM",
+    "AliasSource",
     "Chunk",
     "ChunkEmbedding",
     "ChunkTerm",
+    "Concept",
+    "ConceptAlias",
+    "ConceptEdge",
     "Conversation",
     "Course",
     "Document",
     "DocumentStatus",
+    "ExtractionRunStatus",
+    "GraphExtractionRun",
     "LLMUsage",
     "Message",
     "MessageRole",
