@@ -138,6 +138,7 @@ TENANT_SCOPED_TABLES: frozenset[str] = frozenset(
         "conversations",
         "messages",
         "refresh_token_revocations",
+        "llm_usage",
     }
 )
 

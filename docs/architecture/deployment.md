@@ -92,6 +92,29 @@ developer to remember a raw compose invocation.
 
 ---
 
+## 2a. Frontend hosting: no Vercel
+
+The React client is built to static assets and served from **S3 behind CloudFront**,
+or from the `web` container in the compose stack for local work. There is
+deliberately **no Vercel project, no `vercel.json`, and no Vercel deployment step**
+in CI.
+
+The reason is coherence rather than preference. The API, the database and the
+object store all live in one AWS account behind one VPC; putting the client on a
+separate platform would add a second deployment pipeline, a second place for
+environment variables to drift, a second origin to configure for CORS, and a
+second thing to reason about when a request fails. One deployment story with one
+rollback procedure is worth more here than a marginally simpler static deploy.
+
+The prototype's history is the cautionary version of this: it carried
+deployment plumbing for three separate hosting targets at once — Hugging Face
+Spaces, Render and Vercel — none of which was working. `docs/PROJECT_AUDIT.md`
+records that; this document records that the rebuild does not repeat it.
+
+Reintroducing an external frontend host is a one-line change to CI, not a
+forbidden choice — but it should be a decision with a reason, recorded as an ADR,
+rather than a leftover configuration file.
+
 ## 3. Container images
 
 ### 3.1 Multi-stage strategy
