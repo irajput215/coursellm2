@@ -1,0 +1,100 @@
+# ---------------------------------------------------------------------------
+# Secrets and environment
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials
+credentials.*
+secrets/
+!infra/terraform/**/*.tfvars.example
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+.mypy_cache/
+.dmypy.json
+.ruff_cache/
+.pytest_cache/
+.hypothesis/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+
+# ---------------------------------------------------------------------------
+# Node / frontend
+# ---------------------------------------------------------------------------
+node_modules/
+apps/web/dist/
+apps/web/dist-ssr/
+apps/web/.vite/
+apps/web/coverage/
+*.tsbuildinfo
+.pnpm-store/
+
+# ---------------------------------------------------------------------------
+# Data, artefacts and local state
+# ---------------------------------------------------------------------------
+*.db
+*.sqlite
+*.sqlite3
+uploads/
+data/
+artifacts/
+*.log
+logs/
+.DS_Store
+Thumbs.db
+
+# Evaluation outputs: reports are committed deliberately, but raw per-run dumps
+# and cached LLM responses are not (they are large and environment-specific).
+evals/reports/raw/
+evals/reports/*.jsonl
+evals/cache/
+!evals/reports/.gitkeep
+
+# ---------------------------------------------------------------------------
+# Infrastructure
+# ---------------------------------------------------------------------------
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+.terraform.lock.hcl
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+infra/terraform/**/*.tfvars
+!infra/terraform/**/*.tfvars.example
+
+# ---------------------------------------------------------------------------
+# Editors
+# ---------------------------------------------------------------------------
+.idea/
+.vscode/
+!.vscode/settings.json
+*.swp
+
+# ---------------------------------------------------------------------------
+# Interview preparation. Local only. NEVER committed, NEVER pushed.
+# ---------------------------------------------------------------------------
+interview_prep/

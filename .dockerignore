@@ -1,0 +1,52 @@
+# CourseLLM docker build context hygiene.
+
+# Version control and CI
+.git
+.gitignore
+.github
+
+# Python
+__pycache__
+**/__pycache__
+*.py[cod]
+.venv
+venv
+.mypy_cache
+.ruff_cache
+.pytest_cache
+.coverage
+htmlcov
+
+# Node
+**/node_modules
+apps/web/dist
+*.tsbuildinfo
+
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+credentials
+*.pem
+*.key
+
+# Local data and artefacts
+*.db
+*.sqlite3
+uploads
+data
+artifacts
+logs
+*.log
+.DS_Store
+
+# Infrastructure
+**/.terraform
+*.tfstate
+*.tfstate.*
+infra/terraform/**/*.tfvars
+
+# Docs and local-only material
+interview_prep
+docs/images
+evals/reports/raw
