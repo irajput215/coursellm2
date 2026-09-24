@@ -202,18 +202,26 @@ build-web: ## Build the frontend into $(WEB_DIR)/dist
 	cd $(WEB_DIR) && npm run build
 
 .PHONY: up
-up: ## Start the full stack in Docker
+up: ## [docker] Start the full stack (build, migrate, api, web)
 	docker compose up --build -d
 	@echo "API  -> http://localhost:8000/docs"
 	@echo "Web  -> http://localhost:5173"
 
 .PHONY: down
-down: ## Stop the Docker stack
+down: ## [docker] Stop the stack (keeps volumes; use docker compose down -v to drop data)
 	docker compose down
 
 .PHONY: logs
-logs: ## Tail Docker logs
+logs: ## [docker] Tail logs from every service
 	docker compose logs -f --tail=100
+
+.PHONY: ps
+ps: ## [docker] Show container status (migrate should read "exited (0)")
+	docker compose ps
+
+.PHONY: migrate-docker
+migrate-docker: ## [docker] Re-run migrations and the app-role bootstrap as the schema owner
+	docker compose run --rm --build migrate
 
 # ---------------------------------------------------------------------------
 # Evaluation

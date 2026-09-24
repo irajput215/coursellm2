@@ -1,0 +1,58 @@
+# CourseLLM — optional OpenTelemetry collector configuration.
+#
+# Enabled only through the compose `otel` profile:
+#
+#     docker compose --profile otel up -d
+#     OTEL_ENABLED=true   # in .env, plus the otel profile
+#
+# The API exports OTLP/HTTP to http://otel-collector:4318. This configuration
+# receives OTLP (gRPC and HTTP) and writes it to the collector's own log, so the
+# stack is self-contained: no external observability backend is required to see
+# that tracing works. Point an `otlp` exporter at a real backend by adding the
+# exporter and adding it to the pipeline below.
+#
+# The image is distroless, so it has no shell and the compose service cannot
+# declare a Docker healthcheck; the collector's own health endpoint is exposed
+# on :13133 instead.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # Protect the collector from a burst: refuse rather than grow without bound.
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 75
+    spike_limit_percentage: 20
+  batch:
+    timeout: 5s
+    send_batch_size: 512
+
+exporters:
+  # Console output. Replace or extend with an `otlp` exporter for a backend.
+  # `verbosity: basic` prints one line per batch; `detailed` prints every span.
+  debug:
+    verbosity: basic
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  telemetry:
+    logs:
+      level: info
+    metrics:
+      # The collector's own Prometheus endpoint, published as :8889 by compose.
+      address: 0.0.0.0:8889
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [debug]

@@ -5,7 +5,11 @@
 # In the AWS topology the same `dist/` directory is synced to S3 and served by
 # CloudFront, with `/api/*` routed to the API service (a separate origin).
 #
-# Build from the repository root:
+# This image is the delivery mechanism for the real React client in apps/web.
+# It builds that client; it does not invent one.
+#
+# Build from the repository root (the context must be the repository root, so
+# the image can read apps/web and docker/nginx.conf):
 #
 #     docker build -f docker/web.Dockerfile -t coursellm-web .
 #
@@ -13,9 +17,15 @@
 #
 #     docker build -f docker/web.Dockerfile \
 #       --build-arg VITE_API_BASE_URL=https://api.example.com -t coursellm-web .
+#
+# The nginx server block lives in docker/nginx.conf so that the SPA fallback,
+# security headers and cache policy are reviewable in one place (and reusable
+# for a self-hosted deployment).
 
 # ---- build ------------------------------------------------------------------
-FROM node:24-alpine AS build
+# Pinned by tag AND by the multi-architecture manifest-list digest.
+FROM node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1 AS build
+
 WORKDIR /app
 
 # Dependency manifests first so the npm layer is cached across source edits.
@@ -29,51 +39,37 @@ COPY apps/web/ ./
 ARG VITE_API_BASE_URL=""
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
 
+# `npm run build` runs the type-check and then `vite build` into apps/web/dist.
 RUN npm run build
 
 # ---- serve ------------------------------------------------------------------
-FROM nginx:1.27-alpine AS serve
+# Pinned by tag AND by the multi-architecture manifest-list digest.
+#
+# `nginx-unprivileged` is the same nginx built to run as the non-root `nginx`
+# user (uid 101) with its caches and pid file already redirected to writable
+# paths. It listens on 8080 because a non-root process cannot bind port 80 —
+# which is why docker/nginx.conf says `listen 8080` and compose maps the host
+# port onto 8080.
+FROM nginxinc/nginx-unprivileged:1.27-alpine@sha256:65e3e85dbaed8ba248841d9d58a899b6197106c23cb0ff1a132b7bfe0547e4c0 AS serve
 
+LABEL org.opencontainers.image.title="coursellm-web" \
+      org.opencontainers.image.description="CourseLLM web client — static assets served by nginx" \
+      org.opencontainers.image.source="https://github.com/irajput215/coursellm2" \
+      org.opencontainers.image.licenses="MIT"
+
+# Swapping in a different build output is a one-line change: point this COPY at
+# another directory (or a prebuilt artefact) and nothing else moves.
+#
+# The base image already switches to uid 101. Switch back to root only for the
+# two COPY operations, so they cannot depend on the base image's ownership
+# layout, then drop to the non-root user for the runtime.
+USER 0
+COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 
-RUN cat > /etc/nginx/conf.d/default.conf <<'NGINX'
-server {
-    listen 80;
-    server_name _;
-    root /usr/share/nginx/html;
-    index index.html;
+USER 101
 
-    gzip on;
-    gzip_min_length 1024;
-    gzip_types text/css application/javascript application/json image/svg+xml;
+EXPOSE 8080
 
-    # Hashed asset filenames are content-addressed, so they can be cached hard.
-    location /assets/ {
-        expires 1y;
-        add_header Cache-Control "public, immutable";
-        try_files $uri =404;
-    }
-
-    # The shell must be revalidated, otherwise a deploy is invisible.
-    location = /index.html {
-        add_header Cache-Control "no-store";
-    }
-
-    # Container liveness for the orchestrator; it is not the API's /healthz.
-    location = /healthz {
-        access_log off;
-        add_header Content-Type text/plain;
-        return 200 "ok\n";
-    }
-
-    # Single-page application fallback: unknown paths render the 404 route
-    # rather than nginx's own error page.
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-}
-NGINX
-
-EXPOSE 80
-HEALTHCHECK --interval=30s --timeout=3s --retries=3 \
-    CMD wget -q -O - http://127.0.0.1/healthz >/dev/null 2>&1 || exit 1
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD wget -q -O - http://127.0.0.1:8080/healthz >/dev/null 2>&1 || exit 1
