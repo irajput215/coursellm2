@@ -141,6 +141,14 @@ omit = [
 ]
 
 [tool.coverage.report]
+# Measured over `-m "unit or security or integration"` on 2026-09-25:
+# 85.8% of statements (9473/11047) and 66.1% of branches (1389/2102), which is
+# the 82.6% total coverage.py reports. The threshold is set one point below the
+# measured total so that an honest run has a small margin, and every point of
+# that margin is real: at this code size one percent is ~130 statements.
+# `apps/api/tests/COVERAGE.md` records the measurement, the per-package
+# breakdown and the specific uncovered lines that matter.
+fail_under = 82
 exclude_lines = [
     "pragma: no cover",
     "if TYPE_CHECKING:",
