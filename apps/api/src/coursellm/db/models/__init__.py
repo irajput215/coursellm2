@@ -31,6 +31,7 @@ from coursellm.db.models.identity import (
     User,
     UserRole,
 )
+from coursellm.db.models.usage import LLMUsage
 
 __all__ = [
     "EMBEDDING_DIM",
@@ -41,6 +42,7 @@ __all__ = [
     "Course",
     "Document",
     "DocumentStatus",
+    "LLMUsage",
     "Message",
     "MessageRole",
     "QuarantineState",

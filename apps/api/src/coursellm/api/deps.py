@@ -149,3 +149,58 @@ def as_uuid(value: str) -> uuid.UUID:
         return uuid.UUID(value)
     except (ValueError, AttributeError) as exc:
         raise ValidationError("The provided identifier is not a valid UUID.") from exc
+
+
+# ---------------------------------------------------------------------------
+# LLM gateway
+#
+# The imports live at the end of the file rather than in the block at the top
+# because this dependency was added by appending to an existing module. The
+# gateway is process-wide (settings are process-wide), so it is resolved once
+# and cached; the session factory is injected so usage rows can be written
+# without the caller handling accounting.
+# ---------------------------------------------------------------------------
+from coursellm.llm.gateway import LLMGateway, get_gateway  # noqa: E402
+from coursellm.llm.types import LLMScope, bind_llm_scope  # noqa: E402
+
+
+def _request_id_uuid() -> uuid.UUID | None:
+    """Best-effort conversion of the middleware request id to a UUID.
+
+    The correlation id in ``structlog`` is a hex string or a sanitised
+    client-supplied token, so it is only usable as ``llm_usage.request_id`` when
+    it happens to parse; otherwise the usage row simply has no request id rather
+    than a malformed one.
+    """
+    import structlog
+
+    raw = structlog.contextvars.get_contextvars().get("request_id")
+    if not isinstance(raw, str):
+        return None
+    try:
+        return uuid.UUID(raw)
+    except (ValueError, AttributeError):
+        return None
+
+
+async def get_llm_gateway(settings: SettingsDep, context: ContextDep) -> AsyncIterator[LLMGateway]:
+    """Resolve the model gateway for an authenticated request.
+
+    ``EchoGateway`` is returned when ``llm_enabled`` is false, so local runs and
+    tests need no provider key. The ambient scope is bound here — from the token
+    derived tenant, never from a request parameter — so the gateway can write
+    usage rows without the handler threading tenant or user through its own
+    signature.
+    """
+    session_factory = await get_session_factory(settings)
+    gateway = get_gateway(settings, session_factory)
+    scope = LLMScope(
+        tenant_id=context.tenant_id,
+        user_id=context.user_id,
+        request_id=_request_id_uuid(),
+    )
+    with bind_llm_scope(scope):
+        yield gateway
+
+
+LLMGatewayDep = Annotated[LLMGateway, Depends(get_llm_gateway)]
