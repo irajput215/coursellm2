@@ -145,6 +145,7 @@ TENANT_SCOPED_TABLES: frozenset[str] = frozenset(
         "graph_extraction_runs",
         "progress_events",
         "quiz_attempts",
+        "quizzes",
         "roadmaps",
         "roadmap_steps",
     }

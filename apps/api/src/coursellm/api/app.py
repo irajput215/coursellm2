@@ -181,7 +181,14 @@ def _build_api_router() -> APIRouter:
     Domain routers are added here as they are implemented, so the public surface
     is auditable in one place rather than inferred from filesystem discovery.
     """
-    from coursellm.api.routers import auth, chat, courses, recommendations, roadmaps
+    from coursellm.api.routers import (
+        assessments,
+        auth,
+        chat,
+        courses,
+        recommendations,
+        roadmaps,
+    )
 
     router = APIRouter()
     router.include_router(auth.router)
@@ -189,6 +196,8 @@ def _build_api_router() -> APIRouter:
     router.include_router(chat.router)
     router.include_router(roadmaps.router)
     router.include_router(roadmaps.progress_router)
+    router.include_router(assessments.router)
+    router.include_router(assessments.progress_router)
     router.include_router(recommendations.router)
     return router
 
@@ -223,6 +232,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "Personalised, ordered learning roadmaps: creation from a goal, "
                     "deterministic effort estimates, progress-driven revision and step "
                     "advancement."
+                ),
+            },
+            {
+                "name": "assessments",
+                "description": (
+                    "Grounded quiz generation and rubric scoring: items cite the "
+                    "passages that support them, the total is computed from the "
+                    "criterion weights, and misconceptions must cite the evidence "
+                    "that contradicts them."
                 ),
             },
             {

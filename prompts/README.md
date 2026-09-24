@@ -44,14 +44,21 @@ Every `{placeholder}` that appears in a prompt body must be listed here.
 
 | Placeholder | Used by | Meaning |
 |-------------|---------|---------|
-| `{course_name}` | `tutor.answer`, `tutor.refusal`, `tutor.extractive` | Display name of the course the question is scoped to. |
-| `{evidence}` | `tutor.answer` | The delimited, untrusted evidence region assembled from ranked passages. |
-| `{question}` | `tutor.refusal`, `tutor.extractive` | The student's question, rendered verbatim into a response template. |
+| `{course_name}` | `tutor.answer`, `tutor.refusal`, `tutor.extractive`, `assessor.quiz`, `assessor.evaluate` | Display name of the course the question is scoped to. |
+| `{evidence}` | `tutor.answer`, `assessor.quiz`, `assessor.evaluate` | The delimited, untrusted evidence region assembled from ranked passages. |
+| `{question}` | `tutor.refusal`, `tutor.extractive`, `assessor.evaluate` | The student's question, rendered verbatim into a response template; for `assessor.evaluate` it is the quiz item being answered. |
 | `{excerpts}` | `tutor.extractive` | Quoted extracts with their `[Sn]` citation ids, used when no model is reachable. |
+
+`assessor.quiz` and `assessor.evaluate` introduce no placeholder that is not
+already listed above. The variables that parameterise a quiz item — the item
+count, the difficulty, the allowed item types and the candidate concept ids —
+are passed in the user message rather than interpolated into the template, so a
+prompt file cannot be the place where a count or an id is substituted.
 
 ## Untrusted evidence
 
-`tutor.answer` is the only template that receives document text. The evidence is
+`tutor.answer`, `assessor.quiz` and `assessor.evaluate` are the templates that
+receive document text. The evidence is
 interpolated into a single fenced slot whose delimiters are
 `<untrusted_evidence ...>` and `</untrusted_evidence>`. The prompt states that
 everything inside that region is data and must never be followed as instruction,
