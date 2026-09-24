@@ -227,6 +227,7 @@ def _build_api_router() -> APIRouter:
         auth,
         chat,
         courses,
+        documents,
         recommendations,
         roadmaps,
     )
@@ -236,6 +237,7 @@ def _build_api_router() -> APIRouter:
     router = APIRouter(dependencies=[Depends(enforce_request_rate_limit)])
     router.include_router(auth.router)
     router.include_router(courses.router)
+    router.include_router(documents.router)
     router.include_router(chat.router)
     router.include_router(roadmaps.router)
     router.include_router(roadmaps.progress_router)
@@ -262,6 +264,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             {"name": "health", "description": "Liveness and readiness probes."},
             {"name": "auth", "description": "Registration, login and session lifecycle."},
             {"name": "courses", "description": "Courses and the documents within them."},
+            {
+                "name": "documents",
+                "description": (
+                    "Document ingestion: validated upload, deduplication by content "
+                    "hash, inline parsing/chunking/embedding, listing, retrieval of "
+                    "ingestion status, and deletion with its stored object."
+                ),
+            },
             {
                 "name": "chat",
                 "description": (
