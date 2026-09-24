@@ -197,6 +197,10 @@ worker: ## Run the ingestion worker
 web: ## Run the frontend dev server
 	cd $(WEB_DIR) && npm run dev
 
+.PHONY: build-web
+build-web: ## Build the frontend into $(WEB_DIR)/dist
+	cd $(WEB_DIR) && npm run build
+
 .PHONY: up
 up: ## Start the full stack in Docker
 	docker compose up --build -d
@@ -262,7 +266,7 @@ secrets-scan: ## Fail if a secret-shaped value is present in tracked files
 verify: lint typecheck secrets-scan test-all ## The full local quality gate
 
 .PHONY: verify-web
-verify-web: lint-web typecheck-web test-web ## The frontend quality gate
+verify-web: lint-web typecheck-web test-web build-web ## The frontend quality gate
 
 .PHONY: clean
 clean: ## Remove caches and build artefacts
