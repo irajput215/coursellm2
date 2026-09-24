@@ -38,6 +38,8 @@ from coursellm.security.ratelimit import (
     user_key,
 )
 from coursellm.security.tokens import decode_access_token
+from coursellm.storage.base import ObjectStore
+from coursellm.storage.local import get_local_object_store
 
 # ``auto_error=False`` so a missing header produces our own error envelope with a
 # request id, rather than Starlette's bare 403 whose body the frontend cannot
@@ -242,6 +244,22 @@ def get_user_repository(session: TenantSessionDep, context: ContextDep) -> UserR
 CourseRepositoryDep = Annotated[CourseRepository, Depends(get_course_repository)]
 DocumentRepositoryDep = Annotated[DocumentRepository, Depends(get_document_repository)]
 UserRepositoryDep = Annotated[UserRepository, Depends(get_user_repository)]
+
+
+# ---------------------------------------------------------------------------
+# Object storage
+#
+# The ingestion service writes uploaded bytes through the ``ObjectStore``
+# protocol. Resolving it as a dependency (rather than importing a concrete store
+# in the service) is what lets the deployment swap the local filesystem for S3
+# with a one-line change here, and lets tests point at a temporary directory.
+# ---------------------------------------------------------------------------
+def get_object_store() -> ObjectStore:
+    """The process object store: local filesystem in development, S3 in deployment."""
+    return get_local_object_store()
+
+
+ObjectStoreDep = Annotated[ObjectStore, Depends(get_object_store)]
 
 
 def as_uuid(value: str) -> uuid.UUID:
