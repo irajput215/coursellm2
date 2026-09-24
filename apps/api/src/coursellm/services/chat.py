@@ -1,10 +1,17 @@
 """The chat use case: question in, grounded and persisted answer out.
 
-The flow is fixed and lives here rather than in the router so that it is
-reachable from the CLI, a worker or a test without HTTP:
+Two engines answer a turn, and both live here rather than in the router so that
+they are reachable from the CLI, a worker or a test without HTTP:
 
-    resolve conversation -> hybrid retrieval -> rank -> load document metadata
-    -> assemble a budgeted context -> generate -> persist the turn
+* ``agent`` (the default) runs the bounded LangGraph tutor in
+  :mod:`coursellm.services.agent`. Its ``retrieval``/``rerank`` nodes call the
+  same ``hybrid_search``/``rank`` pipeline below and its ``answer_composer``
+  calls the same :class:`~coursellm.rag.generation.generator.AnswerGenerator`, so
+  the two engines cannot drift on evidence, citations or the refusal path.
+* ``rag`` runs the direct flow:
+
+      resolve conversation -> hybrid retrieval -> rank -> load document metadata
+      -> assemble a budgeted context -> generate -> persist the turn
 
 Two rules are enforced at this level.
 
@@ -13,7 +20,8 @@ Two rules are enforced at this level.
   searched.
 * **A refused question is still conversation history.** The user and assistant
   messages are written in the same transaction whether or not evidence was
-  found, so the transcript is complete and auditable.
+  found, so the transcript is complete and auditable. Each turn writes exactly
+  one user row and one assistant row, whichever engine ran it.
 """
 
 from __future__ import annotations
@@ -21,18 +29,32 @@ from __future__ import annotations
 import time
 import uuid
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Literal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from coursellm.agents.nodes.student_context import ProgressProvider
+from coursellm.agents.state import (
+    Citation as AgentCitation,
+)
+from coursellm.agents.state import (
+    ConversationState,
+    StudentProgress,
+    TokenUsage,
+    ToolCallRecord,
+    empty_progress,
+)
 from coursellm.core.config import Settings
 from coursellm.core.errors import NotFoundError, ValidationError
 from coursellm.core.logging import get_logger
-from coursellm.db.models.content import Chunk
+from coursellm.db.models.content import Chunk, SourceType
 from coursellm.db.models.conversation import Conversation, Message, MessageRole
-from coursellm.db.tenancy import TenantContext
+from coursellm.db.tenancy import TenantContext, TenantScope
+from coursellm.learning.planner import load_mastery
+from coursellm.learning.progress import weak_concepts
 from coursellm.llm import ChatMessage, LLMGateway, LLMResponse, ModelTask, resolve_model
 from coursellm.llm.cost import count_tokens
 from coursellm.observability import tracing
@@ -60,16 +82,32 @@ _HISTORY_LIMIT = 6
 _TITLE_CHARS = 120
 
 
+#: The engines a turn may run through. ``agent`` is the bounded LangGraph tutor;
+#: ``rag`` is the direct retrieval-augmented path it shares its evidence pipeline
+#: and generation machinery with.
+Engine = Literal["agent", "rag"]
+DEFAULT_ENGINE: Engine = "agent"
+
+
 @dataclass(frozen=True, slots=True)
 class ChatAnswer:
-    """The result of one chat turn."""
+    """The result of one chat turn, from either engine.
+
+    ``intent`` is the routed intent the agent recorded (``"tutor"`` for the
+    direct path, which has no router) and ``tool_calls`` is the turn's audit
+    record, so a caller can inspect the decision without a second query. Neither
+    is part of the HTTP response: the audit can carry query text.
+    """
 
     answer: str
     citations: list[Citation]
     grounded: bool
     degraded: list[str]
     conversation_id: uuid.UUID
-    usage: LLMResponse | None
+    usage: LLMResponse | TokenUsage | None
+    intent: str = "tutor"
+    trace_id: str | None = None
+    tool_calls: list[ToolCallRecord] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,8 +138,46 @@ async def ask(
     question: str,
     course_id: uuid.UUID | None,
     conversation_id: uuid.UUID | None,
+    engine: Engine = DEFAULT_ENGINE,
 ) -> ChatAnswer:
-    """Answer ``question`` for the authenticated caller and persist the turn."""
+    """Answer ``question`` for the authenticated caller and persist the turn.
+
+    ``agent`` (the default) routes the turn through the graph; ``rag`` runs the
+    direct path. The engine is the only difference: validation, tenancy, the
+    persistence columns and the citation/refusal machinery are shared.
+    """
+    if engine == "agent":
+        return await _ask_agent(
+            session,
+            settings,
+            gateway,
+            context,
+            question=question,
+            course_id=course_id,
+            conversation_id=conversation_id,
+        )
+    return await _ask_rag(
+        session,
+        settings,
+        gateway,
+        context,
+        question=question,
+        course_id=course_id,
+        conversation_id=conversation_id,
+    )
+
+
+async def _ask_rag(
+    session: AsyncSession,
+    settings: Settings,
+    gateway: LLMGateway,
+    context: TenantContext,
+    *,
+    question: str,
+    course_id: uuid.UUID | None,
+    conversation_id: uuid.UUID | None,
+) -> ChatAnswer:
+    """The direct retrieval-augmented turn."""
     prepared = await prepare_turn(
         session,
         settings,
@@ -132,7 +208,127 @@ async def ask(
         degraded=degraded,
         conversation_id=prepared.conversation_id,
         usage=generated.usage,
+        intent="tutor",
+        trace_id=tracing.current_trace_id(),
     )
+
+
+async def _ask_agent(
+    session: AsyncSession,
+    settings: Settings,
+    gateway: LLMGateway,
+    context: TenantContext,
+    *,
+    question: str,
+    course_id: uuid.UUID | None,
+    conversation_id: uuid.UUID | None,
+) -> ChatAnswer:
+    """The graph turn: the bounded agent loop, persisted by ``run_turn``.
+
+    ``run_turn`` writes the conversation and both message rows itself, so this
+    function must not call :func:`prepare_turn` or
+    :func:`persist_assistant_message`: doing both is the double-write the
+    integration suite guards against.
+    """
+    # Imported inside the function because ``services.agent`` imports ``unique``
+    # and ``validate_question`` from this module; a module-level import would be
+    # a cycle.
+    from coursellm.services import agent as agent_service
+
+    turn = await agent_service.run_turn(
+        session,
+        settings,
+        gateway,
+        context,
+        question=question,
+        course_id=course_id,
+        conversation_id=conversation_id,
+        # The graph is given the request's own tenant-scoped session, so every
+        # repository read and every tool handler it reaches inherits Row-Level
+        # Security rather than opening its own connection.
+        progress_provider=_progress_provider(session),
+    )
+    return ChatAnswer(
+        answer=turn.answer,
+        citations=await _agent_citations(session, context, turn.citations),
+        grounded=turn.grounded,
+        degraded=turn.degraded,
+        conversation_id=turn.conversation_id,
+        usage=turn.token_usage if turn.token_usage["calls"] else None,
+        intent=turn.intent,
+        trace_id=tracing.current_trace_id(),
+        tool_calls=turn.tool_calls,
+    )
+
+
+def _progress_provider(session: AsyncSession) -> ProgressProvider:
+    """A progress reader over the caller's tenant-scoped session.
+
+    The graph's ``get_student_progress`` tool projects ``state["student_progress"]``,
+    which the ``student_context`` node loads through this provider. Without it the
+    tool still runs but always sees an empty projection; with it, the tool reads
+    the student's own append-only evidence — via the same projection the rest of
+    the application uses rather than a second implementation of mastery.
+    """
+
+    async def provider(state: ConversationState) -> StudentProgress:
+        course_id = state.get("current_course_id")
+        user_id = state.get("user_id")
+        if user_id is None:
+            return empty_progress(course_id)
+        mastery = await load_mastery(session, TenantScope(state["tenant_id"]), user_id=user_id)
+        return StudentProgress(
+            course_id=str(course_id) if course_id is not None else None,
+            mastery={str(concept_id): value for concept_id, value in mastery.items()},
+            attempts={},
+            last_seen={},
+            weak_concepts=[str(concept_id) for concept_id in weak_concepts(mastery)],
+            completed_steps=[],
+        )
+
+    return provider
+
+
+async def _agent_citations(
+    session: AsyncSession,
+    context: TenantContext,
+    citations: Sequence[AgentCitation],
+) -> list[Citation]:
+    """Rehydrate the graph's typed citations into the display citation model.
+
+    ``ConversationState`` carries the citation identifiers and page but not the
+    filename (it is not needed to ground an answer), so the filename is read back
+    through the document repository, under the same tenancy as the turn.
+    """
+    documents = DocumentRepository(session, context)
+    filenames: dict[uuid.UUID, str] = {}
+    result: list[Citation] = []
+    for citation in citations:
+        document_id = uuid.UUID(citation["document_id"])
+        filename = filenames.get(document_id)
+        if filename is None:
+            document = await documents.get(document_id)
+            filename = document.filename if document is not None else f"document {document_id}"
+            filenames[document_id] = filename
+        result.append(
+            Citation(
+                citation_id=citation["citation_id"],
+                chunk_id=uuid.UUID(citation["chunk_id"]),
+                document_id=document_id,
+                filename=filename,
+                page=citation["page"],
+                source_type=_agent_source_type(citation["source_type"]),
+                quote="",
+            )
+        )
+    return result
+
+
+def _agent_source_type(value: str) -> SourceType:
+    try:
+        return SourceType(value)
+    except ValueError:
+        return SourceType.OTHER
 
 
 async def prepare_turn(
@@ -418,7 +614,9 @@ def _utcnow() -> datetime:
 
 
 __all__ = [
+    "DEFAULT_ENGINE",
     "ChatAnswer",
+    "Engine",
     "PreparedTurn",
     "ask",
     "build_generator",

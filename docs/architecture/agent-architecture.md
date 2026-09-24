@@ -1195,6 +1195,7 @@ because it makes every other claim in it unreliable.
 | 3 | `Permission` has the members listed in §7.1; `DegradationReason` has the members listed in §2 | `GRAPH_WRITE` was added to `Permission`, and `PROGRESS_UNAVAILABLE`, `SAFETY_GUARDRAIL_ERROR`, `EXTERNAL_SOURCES_UNAVAILABLE`, `TOOL_UNAVAILABLE` and `TOOL_ERROR` were added to `DegradationReason` | The failure tables elsewhere in this document already named several of these reasons without declaring them. An enum that omits the values the code needs is a documentation bug; the enum is the fix. |
 | 4 | `retrieved_documents` accumulates across retrieval passes | It does, via `operator.add`; `rerank` therefore emits scored copies and the composer de-duplicates by `chunk_id`, keeping the scored entry | The reducer is append-only by design so a second pass accumulates rather than discarding the first. Carrying the rerank score onto the accumulated entry without a mutable channel is the straightforward consequence. |
 | 5 | Non-tutor intents are phrased by `answer_composer` | Tutor turns go through the model; planner, recommender, assessment and progress turns are phrased deterministically from their typed artifacts | The artifacts are already structured and validated. Asking a model to restate validated JSON adds latency, cost and a hallucination surface for no information gain. |
+| 6 | The graph is the chat path | `POST /api/v1/chat` and `/chat/stream` default to the graph; the request body's `"engine": "rag"` selects the direct retrieval-augmented path, and the response carries the routed `intent`, the aggregated `degraded` reasons and the `trace_id` | The direct path must stay reachable, testable and comparable — it is what the graph's `retrieval`, `rerank` and `answer_composer` nodes call. Both engines persist through the same helper and share `AnswerGenerator`, so the citation and refusal machinery cannot diverge; the escape hatch changes routing, not grounding. |
 
 ### 14.2 Known gaps
 
@@ -1204,7 +1205,6 @@ deliberate deferral with a named owner PR, not an oversight.
 | Gap | Impact | Where it is closed |
 |-----|--------|--------------------|
 | `AGENT_MODEL`, `AGENT_FALLBACK_MODEL` and `AGENT_ROUTER_MODEL` are read and recorded in `evaluation_metadata`, but the gateway still selects the provider model from `ModelTask` alone | A per-role model override is recorded but has no effect on routing. The knob currently documents intent without changing behaviour, which is the one thing a configuration option must not do. | Wire an explicit override through `LLMRequest` in a hardening pass, or delete the settings so `ModelTask` is the single mechanism. Recorded in PR 23. |
-| `messages` lacks the `intent`, `model`, `prompt_version`, `latency_ms` and `trace_id` columns described in §10.1 | Persistence writes the columns that exist — tenant, conversation, role, content, citations, degraded, grounded, token_count and `retrieval_config_version`. A turn cannot be filtered by intent or joined to `llm_usage` by `trace_id` at the SQL level. | A migration in PR 15, which introduces the trace identifiers the column would hold. |
 | `AGENT_REQUIRE_WRITE_CONFIRMATION`, the `interrupt()` wrapper and the `ProposedAction` flow in §7.1 are not wired | Consequential-write confirmation is specified but absent. It is not currently exploitable, because every write tool is a typed stub that performs no write. | The write tools are implemented in PR 11 (`update_learning_plan`) and PR 13 (`create_quiz`, `evaluate_answer`); the confirmation wrapper must land with the first of them, not after. |
 | `search_course` returns the course and its ready documents, without the module/lecture/topic nodes §7.2 describes | Course structure is coarser than specified, so a "which lecture covers this?" question is answered from documents rather than from structure. | Needs a schema for course structure; tracked for PR 11, which already models ordered roadmap steps. |
 | `search_web_sources` performs no outbound HTTP | The tool is registered only when `AGENT_WEB_SEARCH_ENABLED` is set and returns a typed empty result with `degraded=["external_sources_unavailable"]` | PR 12, which also owns the domain allowlist that makes outbound fetching safe. |
@@ -1227,3 +1227,30 @@ that invents a recommendation is worse than one that says it has none.
 `search_documents`, `search_books`, `search_course` and `get_student_progress` are wired
 to real logic: the first two run the full `rerank(rrf(hybrid_search(…)))` pipeline on the
 tenant-scoped session.
+
+### 14.4 Gaps closed by the request-path wiring
+
+The earlier revision of this document described a graph that was implemented and tested
+but never invoked by the product: `POST /api/v1/chat` ran the direct RAG path only, so
+live traffic produced no `agent_graph` or per-node spans, the tool permission matrix was
+exercised only by unit tests, and the planner, recommender, assessment and progress
+routes were unreachable from HTTP. That gap is closed:
+
+- `services/chat.ask` dispatches on the request's `engine` field. `"agent"` (the
+  default) calls `services/agent.run_turn`, so the graph is the request path; `"rag"`
+  keeps the direct path reachable and comparable.
+- The graph receives the request's own tenant-scoped `AsyncSession` and verified
+  `TenantContext`, so `ToolExecutor` injects the real `tenant_id`/`user_id` from state
+  and every tool that reads the database does so under Row-Level Security. The tool
+  audit records are returned on the answer and asserted by
+  `tests/integration/test_chat_agent_path.py`.
+- The direct path and the graph share `AnswerGenerator` (grounding, citation
+  verification, the refusal template and the extractive fallback) and the same
+  `messages` observability columns (`intent`, `model`, `prompt_version`, `latency_ms`,
+  `trace_id`); the integration suite asserts that both engines return the same citation
+  ids for one factual question and that every request writes exactly one user and one
+  assistant row.
+- A chat request now emits an `agent_graph` span whose children are the `node:*` spans
+  that ran, with the `generation` and `llm_call` spans nested under `answer_composer`.
+  The span redaction policy is unchanged: no span attribute carries prompt, document or
+  completion text.
