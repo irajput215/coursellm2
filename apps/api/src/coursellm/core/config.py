@@ -135,6 +135,9 @@ class Settings(BaseSettings):
     llm_routing_enabled: bool = True
     llm_max_input_tokens: int = Field(default=8000, ge=256)
     llm_max_output_tokens: int = Field(default=1500, ge=64)
+    # Low by default: a tutoring answer grounded in retrieved evidence should be
+    # reproducible, and creativity is the enemy of a faithful citation.
+    llm_temperature: float = Field(default=0.1, ge=0.0, le=2.0)
 
     openai_api_key: str = ""
     anthropic_api_key: str = ""
