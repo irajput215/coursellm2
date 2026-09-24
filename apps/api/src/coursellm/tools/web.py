@@ -1,6 +1,7 @@
-"""``search_web_sources`` — allowlisted external lookups, off by default.
+"""``search_web_sources`` — allowlisted candidates from the curated catalogue.
 
-Two independent switches guard this tool, which is deliberate belt-and-braces:
+Two independent switches guard this tool, exactly as before, which is deliberate
+belt-and-braces:
 
 * :func:`coursellm.tools.build_tool_registry` registers it **only** when
   ``AGENT_WEB_SEARCH_ENABLED`` is true. With the default ``false`` the name is
@@ -8,24 +9,47 @@ Two independent switches guard this tool, which is deliberate belt-and-braces:
   and there is no schema to bind to.
 * :class:`~coursellm.tools.registry.ToolExecutor` refuses ``side_effects =
   "external"`` unless ``AGENT_ALLOW_EXTERNAL_TOOLS`` is true, so enabling one
-  flag without the other still does not reach the network.
+  flag without the other still does not run the handler.
 
-The handler itself is a typed stub: no outbound HTTP is performed by the agent
-layer (``security.md`` section 5 item 9), and the allowlisted fetcher is PR 12.
-It returns candidates only and never page bodies, which is what keeps an
-external page from entering the evidence region as anything but delimited data.
+**No outbound HTTP is performed by this PR, on purpose.** Fetching an arbitrary
+allowlisted page is an SSRF surface (redirects, DNS rebinding, private address
+space) *and* a prompt-injection surface: the fetched body would enter the model's
+context, and a page can be changed after it was reviewed. Doing it safely needs
+its own review — egress controls, redirect pinning, size and content-type limits,
+and delimiting the body as untrusted data — so it is deferred rather than rushed.
+
+What the handler does instead is return **candidates from the curated catalogue**
+whose host is on the explicit :data:`~coursellm.recommend.seed.SOURCE_TRUST_BY_DOMAIN`
+allowlist. A caller may narrow the allowlist but can never widen it: the requested
+domains are intersected with the curated set, so a request naming ``evil.example``
+selects nothing. When outbound fetching is added, this allowlist is the control
+that will make it safe — the URL that will be fetched must already have passed it.
 """
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from pydantic import BaseModel, ConfigDict, Field
 
+from coursellm.recommend.catalogue import ResourceCatalogue
+from coursellm.recommend.seed import SOURCE_TRUST_BY_DOMAIN, domain_for_host, host_of
 from coursellm.tools.registry import (
     Permission,
     ToolContext,
     ToolRegistry,
     ToolSpec,
 )
+
+#: Rows scanned before the allowlist filter is applied. The catalogue is small
+#: and curated; the bound keeps a broad query from reading everything.
+SCAN_LIMIT = 500
+#: Characters of the catalogue description returned as the snippet. A snippet is
+#: a pointer, not a page: the caller follows the URL deliberately.
+SNIPPET_CHARS = 280
+
+#: The default allowlist is exactly the curated trust mapping's domains.
+DEFAULT_ALLOWED_DOMAINS: tuple[str, ...] = tuple(sorted(SOURCE_TRUST_BY_DOMAIN))
 
 
 class SearchWebSourcesArgs(BaseModel):
@@ -54,9 +78,60 @@ class WebSourcesResult(BaseModel):
     degraded: list[str] = Field(default_factory=list)
 
 
+def is_allowlisted(url: str) -> bool:
+    """Whether ``url``'s host is on the curated allowlist."""
+    return domain_for_host(host_of(url)) is not None
+
+
+def effective_domains(requested: list[str] | None) -> frozenset[str]:
+    """Narrow the allowlist; a caller can never widen it.
+
+    ``None`` means "the whole curated allowlist". A requested domain is kept only
+    when it is itself a curated domain, so the result is always a subset.
+    """
+    if requested is None:
+        return frozenset(DEFAULT_ALLOWED_DOMAINS)
+    return frozenset(domain for domain in requested if domain in SOURCE_TRUST_BY_DOMAIN)
+
+
+def _host_in_domains(url: str, domains: frozenset[str]) -> bool:
+    host = host_of(url)
+    return any(host == domain or host.endswith(f".{domain}") for domain in domains)
+
+
 async def search_web_sources(args: SearchWebSourcesArgs, ctx: ToolContext) -> WebSourcesResult:
-    """Return no external candidates; the allowlisted fetcher is PR 12."""
-    return WebSourcesResult(sources=[], degraded=["external_sources_unavailable"])
+    """Return allowlisted catalogue candidates; no page is fetched.
+
+    ``outbound_fetch_deferred`` is always present in ``degraded`` so a caller can
+    tell that the snippet is catalogue metadata rather than the live page.
+    """
+    degraded = ["outbound_fetch_deferred"]
+    if ctx.session is None:
+        degraded.append("no_catalogue_session")
+        return WebSourcesResult(sources=[], degraded=degraded)
+
+    domains = effective_domains(args.allowlist_domains)
+    if not domains:
+        degraded.append("no_allowlisted_domains")
+        return WebSourcesResult(sources=[], degraded=degraded)
+
+    catalogue = ResourceCatalogue(ctx.session)
+    page = await catalogue.search(query=args.query, limit=SCAN_LIMIT)
+    retrieved_at = datetime.now(UTC).isoformat()
+    sources = [
+        WebSource(
+            url=resource.url,
+            title=resource.title,
+            snippet=resource.description[:SNIPPET_CHARS],
+            retrieved_at=retrieved_at,
+        )
+        for resource in page.items
+        if _host_in_domains(resource.url, domains)
+    ][: args.k]
+
+    if not sources:
+        degraded.append("no_allowlisted_source_matches")
+    return WebSourcesResult(sources=sources, degraded=degraded)
 
 
 def register(registry: ToolRegistry) -> None:
@@ -77,9 +152,14 @@ def register(registry: ToolRegistry) -> None:
 
 
 __all__ = [
+    "DEFAULT_ALLOWED_DOMAINS",
+    "SCAN_LIMIT",
+    "SNIPPET_CHARS",
     "SearchWebSourcesArgs",
     "WebSource",
     "WebSourcesResult",
+    "effective_domains",
+    "is_allowlisted",
     "register",
     "search_web_sources",
 ]

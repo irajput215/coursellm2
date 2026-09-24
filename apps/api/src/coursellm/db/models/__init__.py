@@ -48,6 +48,12 @@ from coursellm.db.models.learning import (
     RoadmapStep,
     RoadmapStepStatus,
 )
+from coursellm.db.models.resource import (
+    Resource,
+    ResourceConcept,
+    ResourceType,
+    SourceTrust,
+)
 from coursellm.db.models.usage import LLMUsage
 
 __all__ = [
@@ -73,10 +79,14 @@ __all__ = [
     "QuarantineState",
     "QuizAttempt",
     "RefreshTokenRevocation",
+    "Resource",
+    "ResourceConcept",
+    "ResourceType",
     "Roadmap",
     "RoadmapStatus",
     "RoadmapStep",
     "RoadmapStepStatus",
+    "SourceTrust",
     "SourceType",
     "Tenant",
     "TenantCorpusStats",

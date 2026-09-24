@@ -78,6 +78,34 @@ def _cmd_db_inspect(_: argparse.Namespace) -> int:
     return asyncio.run(_run())
 
 
+def _cmd_seed_catalogue(_: argparse.Namespace) -> int:
+    """Insert curated catalogue resources that are not already present.
+
+    Idempotent on ``url`` and it never overwrites an existing row's metadata, so
+    it is safe to run on every deploy. It is a CLI command rather than an Alembic
+    data migration on purpose: a schema revision must not also be a data import,
+    and catalogue review should be a separate, re-runnable step.
+    """
+    import asyncio
+
+    from coursellm.db.session import get_session_factory
+    from coursellm.recommend.seed import seed_catalogue
+
+    async def _run() -> int:
+        settings = get_settings()
+        factory = await get_session_factory(settings)
+        async with factory() as session, session.begin():
+            report = await seed_catalogue(session)
+
+        print(f"catalogue entries : {report.total}")
+        print(f"inserted          : {report.inserted}")
+        print(f"already present   : {report.skipped}")
+        print(f"concept links new : {report.concept_links_inserted}")
+        return 0
+
+    return asyncio.run(_run())
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="coursellm", description="CourseLLM operations.")
     parser.add_argument("--version", action="version", version=f"coursellm {__version__}")
@@ -93,6 +121,10 @@ def build_parser() -> argparse.ArgumentParser:
         "db-inspect",
         help="Report the database role and whether Row-Level Security is enforced for it.",
     ).set_defaults(func=_cmd_db_inspect)
+    sub.add_parser(
+        "seed-catalogue",
+        help="Insert missing curated catalogue resources (idempotent on URL).",
+    ).set_defaults(func=_cmd_seed_catalogue)
     return parser
 
 

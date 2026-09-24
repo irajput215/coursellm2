@@ -177,6 +177,10 @@ db-heads: ## Show the current migration head(s)
 db-inspect: ## Report RLS enforcement and connection identity for the app role
 	cd $(API_DIR) && ../../$(VENV)/bin/python -m coursellm.cli db-inspect
 
+.PHONY: seed-catalogue
+seed-catalogue: ## Seed the curated resource catalogue (idempotent on URL)
+	cd $(API_DIR) && ../../$(VENV)/bin/python -m coursellm.cli seed-catalogue
+
 # ---------------------------------------------------------------------------
 # Run
 # ---------------------------------------------------------------------------
