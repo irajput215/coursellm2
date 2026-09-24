@@ -48,6 +48,23 @@ from coursellm.llm.types import (
     UsageRecord,
     current_llm_scope,
 )
+from coursellm.observability import metrics, tracing
+from coursellm.observability.attributes import (
+    COURSELLM_LLM_CACHE_HIT,
+    COURSELLM_LLM_COST_USD,
+    COURSELLM_LLM_FALLBACK_USED,
+    COURSELLM_LLM_PROMPT_VERSION,
+    COURSELLM_LLM_PROVIDER,
+    COURSELLM_LLM_RETRY_COUNT,
+    GEN_AI_OPERATION_NAME,
+    GEN_AI_REQUEST_MODEL,
+    GEN_AI_RESPONSE_FINISH_REASONS,
+    GEN_AI_RESPONSE_MODEL,
+    GEN_AI_SYSTEM,
+    GEN_AI_USAGE_INPUT_TOKENS,
+    GEN_AI_USAGE_OUTPUT_TOKENS,
+    SPAN_LLM_CALL,
+)
 
 logger = get_logger(__name__)
 
@@ -198,6 +215,42 @@ class LiteLLMGateway:
 
     # -- public API ------------------------------------------------------
     async def complete(self, request: LLMRequest) -> LLMResponse:
+        """One logical model call, wrapped in an LLM span.
+
+        The span is opened here rather than in ``_invoke`` so that a subclass
+        which replaces the provider call (the scripted gateways used by tests)
+        still produces a span carrying the same attributes as production.
+        """
+        primary = fallback_chain(self._settings, request.task)[0]
+        with tracing.span(
+            SPAN_LLM_CALL,
+            **{
+                GEN_AI_OPERATION_NAME: "chat",
+                GEN_AI_REQUEST_MODEL: primary,
+                COURSELLM_LLM_PROMPT_VERSION: request.purpose,
+                COURSELLM_LLM_RETRY_COUNT: 0,
+            },
+        ) as record:
+            response = await self._complete_impl(request)
+            record.set_attributes(
+                {
+                    GEN_AI_SYSTEM: response.provider,
+                    GEN_AI_REQUEST_MODEL: response.model,
+                    GEN_AI_RESPONSE_MODEL: response.model,
+                    COURSELLM_LLM_PROVIDER: response.provider,
+                    GEN_AI_USAGE_INPUT_TOKENS: response.prompt_tokens,
+                    GEN_AI_USAGE_OUTPUT_TOKENS: response.completion_tokens,
+                    GEN_AI_RESPONSE_FINISH_REASONS: (
+                        [response.finish_reason] if response.finish_reason else []
+                    ),
+                    COURSELLM_LLM_COST_USD: response.cost_usd,
+                    COURSELLM_LLM_FALLBACK_USED: response.fallback_used,
+                    COURSELLM_LLM_CACHE_HIT: response.cached,
+                }
+            )
+            return response
+
+    async def _complete_impl(self, request: LLMRequest) -> LLMResponse:
         if not self._settings.llm_enabled:
             raise ServiceUnavailableError(
                 "The language model gateway is disabled; callers must degrade."
@@ -255,6 +308,21 @@ class LiteLLMGateway:
         ) from last_error
 
     async def stream(self, request: LLMRequest) -> AsyncIterator[str]:
+        """Streaming LLM call, wrapped in one span for the whole stream."""
+        primary = fallback_chain(self._settings, request.task)[0]
+        with tracing.span(
+            SPAN_LLM_CALL,
+            **{
+                GEN_AI_OPERATION_NAME: "chat",
+                GEN_AI_REQUEST_MODEL: primary,
+                COURSELLM_LLM_PROMPT_VERSION: request.purpose,
+                COURSELLM_LLM_RETRY_COUNT: 0,
+            },
+        ) as _record:
+            async for token in self._stream_impl(request):
+                yield token
+
+    async def _stream_impl(self, request: LLMRequest) -> AsyncIterator[str]:
         if not self._settings.llm_enabled:
             raise ServiceUnavailableError(
                 "The language model gateway is disabled; callers must degrade."
@@ -518,6 +586,13 @@ class LiteLLMGateway:
             attempt=attempt,
             error_type=error_type,
         )
+        metrics.get_registry().increment(
+            "coursellm.errors.total", route="llm", error_class=error_type
+        )
+        if attempt > 1:
+            metrics.get_registry().increment(
+                "coursellm.llm.retries.total", model=model, reason="provider_error"
+            )
         record = self._record(
             request,
             model,
@@ -544,6 +619,18 @@ class LiteLLMGateway:
     ) -> LLMResponse:
         estimate = estimate_cost_breakdown(
             model, completion.prompt_tokens, completion.completion_tokens
+        )
+        metrics.record_llm_call(
+            model=model,
+            provider=provider,
+            operation="chat",
+            duration_ms=completion.latency_ms,
+            input_tokens=completion.prompt_tokens,
+            output_tokens=completion.completion_tokens,
+            cost_usd=estimate.cost_usd,
+            fallback_used=used_fallback,
+            primary_model=fallback_chain(self._settings, request.task)[0],
+            retry_count=max(attempt - 1, 0),
         )
         logger.info(
             "llm_request_completed",

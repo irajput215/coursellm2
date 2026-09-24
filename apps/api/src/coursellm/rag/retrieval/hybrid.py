@@ -21,14 +21,40 @@ index-backed and sub-millisecond at this scale.
 
 from __future__ import annotations
 
+import time
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from coursellm.core.config import Settings
 from coursellm.db.tenancy import TenantScope
+from coursellm.observability import metrics, tracing
+from coursellm.observability.attributes import (
+    COURSELLM_CONFIG_VERSION,
+    RETRIEVAL_CANDIDATES_IN,
+    RETRIEVAL_CANDIDATES_OUT,
+    RETRIEVAL_DEGRADED,
+    RETRIEVAL_DURATION_MS,
+    RETRIEVAL_FILTERS,
+    RETRIEVAL_STAGE,
+    RETRIEVAL_TOP_K_PER_RETRIEVER,
+    SPAN_RETRIEVAL,
+    SPAN_RETRIEVAL_LEXICAL,
+    SPAN_RETRIEVAL_SEMANTIC,
+)
 from coursellm.rag.ingestion.embedders import Embedder
 from coursellm.rag.retrieval.lexical import lexical_search
 from coursellm.rag.retrieval.semantic import semantic_search
 from coursellm.rag.retrieval.types import RetrievalFilters, RetrievalOutcome
+
+
+def filter_names(filters: RetrievalFilters) -> list[str]:
+    """The *names* of the filters in force, never their values.
+
+    A span records which narrowing was applied (``course_id``, ``document_id``)
+    so a recall failure is attributable; the value is an identifier and belongs
+    in neither a span attribute nor a log line.
+    """
+    return [name for name, value in filters.model_dump().items() if value is not None]
 
 
 async def hybrid_search(
@@ -47,8 +73,27 @@ async def hybrid_search(
     raising, so the caller always receives two outcomes.
     """
     k = k_per_retriever if k_per_retriever is not None else settings.retrieval_top_k_per_retriever
-    semantic = await run_semantic_only(session, scope, settings, query=query, filters=filters, k=k)
-    lexical = await run_lexical_only(session, scope, settings, query=query, filters=filters, k=k)
+    with tracing.span(
+        SPAN_RETRIEVAL,
+        **{
+            RETRIEVAL_TOP_K_PER_RETRIEVER: k,
+            RETRIEVAL_FILTERS: filter_names(filters),
+            COURSELLM_CONFIG_VERSION: settings.retrieval_config_version,
+        },
+    ) as record:
+        semantic = await run_semantic_only(
+            session, scope, settings, query=query, filters=filters, k=k
+        )
+        lexical = await run_lexical_only(
+            session, scope, settings, query=query, filters=filters, k=k
+        )
+        record.set_attributes(
+            {
+                RETRIEVAL_CANDIDATES_IN: len(semantic.results) + len(lexical.results),
+                RETRIEVAL_CANDIDATES_OUT: len(semantic.results) + len(lexical.results),
+                RETRIEVAL_DEGRADED: bool(semantic.degraded or lexical.degraded),
+            }
+        )
     return semantic, lexical
 
 
@@ -63,9 +108,16 @@ async def run_semantic_only(
     embedder: Embedder | None = None,
 ) -> RetrievalOutcome:
     """The semantic half alone, so its degradation path is directly testable."""
-    return await semantic_search(
-        session, scope, settings, query=query, filters=filters, k=k, embedder=embedder
-    )
+    started = time.perf_counter()
+    with tracing.span(
+        SPAN_RETRIEVAL_SEMANTIC,
+        **{RETRIEVAL_STAGE: "semantic", RETRIEVAL_TOP_K_PER_RETRIEVER: k},
+    ) as record:
+        outcome = await semantic_search(
+            session, scope, settings, query=query, filters=filters, k=k, embedder=embedder
+        )
+        _record_stage(record, outcome, started=started, stage="semantic", retriever="semantic")
+        return outcome
 
 
 async def run_lexical_only(
@@ -78,4 +130,38 @@ async def run_lexical_only(
     k: int,
 ) -> RetrievalOutcome:
     """The lexical half alone, so its degradation path is directly testable."""
-    return await lexical_search(session, scope, settings, query=query, filters=filters, k=k)
+    started = time.perf_counter()
+    with tracing.span(
+        SPAN_RETRIEVAL_LEXICAL,
+        **{RETRIEVAL_STAGE: "lexical", RETRIEVAL_TOP_K_PER_RETRIEVER: k},
+    ) as record:
+        outcome = await lexical_search(session, scope, settings, query=query, filters=filters, k=k)
+        _record_stage(record, outcome, started=started, stage="lexical", retriever="lexical")
+        return outcome
+
+
+def _record_stage(
+    record: tracing.SpanRecorder,
+    outcome: RetrievalOutcome,
+    *,
+    started: float,
+    stage: str,
+    retriever: str,
+) -> None:
+    duration_ms = (time.perf_counter() - started) * 1000.0
+    degraded = bool(outcome.degraded)
+    record.set_attributes(
+        {
+            RETRIEVAL_CANDIDATES_OUT: len(outcome.results),
+            RETRIEVAL_DURATION_MS: duration_ms,
+            RETRIEVAL_DEGRADED: degraded,
+        }
+    )
+    metrics.record_retrieval_stage(
+        stage=stage,
+        duration_ms=duration_ms,
+        candidates=len(outcome.results),
+        retriever=retriever,
+        degraded=degraded,
+    )
+    metrics.record_degraded(*outcome.degraded)

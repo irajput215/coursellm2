@@ -16,7 +16,7 @@ from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from coursellm import __version__
-from coursellm.api.routers import health
+from coursellm.api.routers import health, metrics
 from coursellm.core.config import Environment, Settings, get_settings
 from coursellm.core.errors import register_exception_handlers
 from coursellm.core.logging import configure_logging, get_logger
@@ -24,6 +24,12 @@ from coursellm.middleware import (
     REQUEST_ID_HEADER,
     BodySizeLimitMiddleware,
     RequestContextMiddleware,
+)
+from coursellm.observability import (
+    RequestMetricsMiddleware,
+    configure_tracing,
+    instrument_fastapi,
+    shutdown_tracing,
 )
 
 logger = get_logger(__name__)
@@ -77,6 +83,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         logger.info("application_stopping", service=settings.app_name)
+        shutdown_tracing(getattr(app.state, "tracing_handle", None))
         await _shutdown()
 
 
@@ -258,6 +265,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "the score decomposition and a deterministic explanation."
                 ),
             },
+            {
+                "name": "metrics",
+                "description": (
+                    "Prometheus scrape endpoint. Unauthenticated, and bounded-cardinality "
+                    "by construction: no tenant, user or free-text label is ever emitted."
+                ),
+            },
         ],
     )
 
@@ -268,6 +282,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # and every response, including rejections.
     app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.max_upload_bytes)
     app.add_middleware(RequestContextMiddleware)
+    app.add_middleware(RequestMetricsMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origin_list,
@@ -285,7 +300,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     register_exception_handlers(app)
 
     app.include_router(health.router)
+    # ``/metrics`` is root-level rather than under the API prefix: a Prometheus
+    # scrape configuration should not have to track the application's version
+    # prefix, and the endpoint carries no application data.
+    app.include_router(metrics.router)
     app.include_router(_build_api_router(), prefix=settings.api_v1_prefix)
+
+    # Tracing is configured before the app serves its first request so the
+    # FastAPI instrumentor can still wrap the middleware stack; a no-op handle
+    # when ``OTEL_ENABLED`` is false. The provider is closed in the lifespan
+    # shutdown below.
+    handle = configure_tracing(settings)
+    instrument_fastapi(app, handle)
+    app.state.tracing_handle = handle
 
     return app
 

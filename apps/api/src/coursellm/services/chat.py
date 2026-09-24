@@ -18,6 +18,7 @@ Two rules are enforced at this level.
 
 from __future__ import annotations
 
+import time
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -34,6 +35,7 @@ from coursellm.db.models.conversation import Conversation, Message, MessageRole
 from coursellm.db.tenancy import TenantContext
 from coursellm.llm import ChatMessage, LLMGateway, LLMResponse, ModelTask, resolve_model
 from coursellm.llm.cost import count_tokens
+from coursellm.observability import tracing
 from coursellm.prompts.loader import PromptLibrary
 from coursellm.rag.generation.context import (
     AssembledContext,
@@ -84,6 +86,9 @@ class PreparedTurn:
     assembled: AssembledContext
     degraded: list[str]
     history: list[ChatMessage]
+    #: Monotonic start of the turn, used to stamp the assistant message's
+    #: ``latency_ms``. Zero when a caller constructed the turn itself.
+    started_ns: int = 0
 
 
 async def ask(
@@ -140,6 +145,7 @@ async def prepare_turn(
     conversation_id: uuid.UUID | None,
 ) -> PreparedTurn:
     """Retrieve, rank, assemble and persist the user message for one turn."""
+    started_ns = time.monotonic_ns()
     validate_question(settings, question)
     conversation = await _resolve_conversation(
         session,
@@ -205,6 +211,7 @@ async def prepare_turn(
         assembled=assembled,
         degraded=unique([*semantic.degraded, *lexical.degraded, *ranking.degraded]),
         history=history,
+        started_ns=started_ns,
     )
 
 
@@ -229,6 +236,11 @@ async def persist_assistant_message(
         if generated.usage is not None
         else count_tokens(generated.text, model)
     )
+    latency_ms = (
+        int((time.monotonic_ns() - prepared.started_ns) / 1_000_000)
+        if prepared.started_ns
+        else None
+    )
     message = Message(
         tenant_id=context.tenant_id,
         conversation_id=prepared.conversation_id,
@@ -240,6 +252,14 @@ async def persist_assistant_message(
         token_count=token_count,
         retrieval_config_version=settings.retrieval_config_version,
         created_at=_utcnow(),
+        # Observability columns. The non-agent chat path has exactly one intent;
+        # ``trace_id`` is taken from the active span so the row joins to the
+        # trace that produced it, and is NULL when tracing is disabled.
+        intent="tutor",
+        model=generated.model or model,
+        prompt_version=generated.prompt_template_id,
+        latency_ms=latency_ms,
+        trace_id=tracing.current_trace_id(),
     )
     session.add(message)
     await session.flush()

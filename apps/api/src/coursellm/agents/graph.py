@@ -55,6 +55,16 @@ from coursellm.agents.state import ConversationState
 from coursellm.core.config import Settings
 from coursellm.db.tenancy import TenantScope
 from coursellm.llm import LLMGateway
+from coursellm.observability import langsmith, tracing
+from coursellm.observability.attributes import (
+    GRAPH_NODE,
+    GRAPH_NODE_ITERATION,
+    GRAPH_NODE_RETRY_COUNT,
+    GRAPH_NODE_TOKENS_IN,
+    GRAPH_NODE_TOKENS_OUT,
+    GRAPH_NODE_TOOL_CALLS,
+    SPAN_NODE_PREFIX,
+)
 from coursellm.prompts.loader import PromptLibrary
 from coursellm.rag.generation.context import DocumentMeta
 from coursellm.rag.rerank.rerankers import Reranker
@@ -89,6 +99,56 @@ def _add_node(builder: StateGraph[ConversationState], name: str, node: NodeFn) -
     builder.add_node(name, cast(Any, node))
 
 
+def _observed_node(
+    name: str,
+    node: NodeFn,
+    *,
+    langsmith_handle: langsmith.LangSmithHandle,
+    config_version: str,
+) -> NodeFn:
+    """Wrap a node so every execution emits a span and a LangSmith run.
+
+    The span records the node name, its iteration and the token/tool deltas the
+    node returned. It records nothing about the state's text: ``graph.node`` is
+    an identifier and :func:`coursellm.observability.tracing.span` drops any
+    attribute whose key looks like payload.
+    """
+
+    async def observed(state: ConversationState) -> dict[str, Any]:
+        iteration = int(state.get("iteration_count", 0) or 0)
+        with tracing.span(
+            f"{SPAN_NODE_PREFIX}:{name}",
+            **{GRAPH_NODE: name, GRAPH_NODE_ITERATION: iteration},
+        ) as record:
+            with langsmith.trace_node(
+                langsmith_handle,
+                graph="tutor_graph",
+                node=name,
+                config_version=config_version,
+                metadata={"iteration": iteration},
+            ):
+                update = await node(state)
+            _record_node_update(record, update)
+            return update
+
+    return observed
+
+
+def _record_node_update(record: tracing.SpanRecorder, update: dict[str, Any]) -> None:
+    usage = update.get("token_usage")
+    if isinstance(usage, dict):
+        record.set_attributes(
+            {
+                GRAPH_NODE_TOKENS_IN: int(usage.get("prompt_tokens", 0) or 0),
+                GRAPH_NODE_TOKENS_OUT: int(usage.get("completion_tokens", 0) or 0),
+            }
+        )
+    tool_calls = update.get("tool_calls")
+    if isinstance(tool_calls, list):
+        record.set_attribute(GRAPH_NODE_TOOL_CALLS, len(tool_calls))
+    record.set_attribute(GRAPH_NODE_RETRY_COUNT, 0)
+
+
 def build_graph(
     *,
     settings: Settings,
@@ -121,45 +181,42 @@ def build_graph(
     scope = scope_check or _course_scope_check(session)
 
     builder: StateGraph[ConversationState] = StateGraph(ConversationState)
-    _add_node(
-        builder,
-        "intent_router",
-        make_intent_router_node(settings=settings, gateway=gateway),
-    )
-    _add_node(
-        builder,
+    langsmith_handle = langsmith.configure_langsmith(settings)
+    config_version = settings.retrieval_config_version
+
+    def add(name: str, node: NodeFn) -> None:
+        """Register a node, wrapped in its per-node span and LangSmith run."""
+        _add_node(
+            builder,
+            name,
+            _observed_node(
+                name, node, langsmith_handle=langsmith_handle, config_version=config_version
+            ),
+        )
+
+    add("intent_router", make_intent_router_node(settings=settings, gateway=gateway))
+    add(
         "student_context",
         make_student_context_node(settings=settings, progress_provider=progress_provider),
     )
     for role in ROLES.values():
-        _add_node(
-            builder,
-            role.node_name,
-            make_agent_node(role, settings=settings, gateway=gateway),
-        )
-    _add_node(
-        builder,
-        "plan_retrieval",
-        make_plan_retrieval_node(settings=settings, scope_check=scope),
-    )
-    _add_node(
-        builder,
+        add(role.node_name, make_agent_node(role, settings=settings, gateway=gateway))
+    add("plan_retrieval", make_plan_retrieval_node(settings=settings, scope_check=scope))
+    add(
         "retrieval",
         make_retrieval_node(
             settings=settings, session=session, retrieve=retrieve, reranker=reranker
         ),
     )
-    _add_node(builder, "rerank", make_rerank_node(settings=settings, reranker=reranker))
-    _add_node(
-        builder,
+    add("rerank", make_rerank_node(settings=settings, reranker=reranker))
+    add(
         "knowledge_graph",
         make_knowledge_graph_node(
             settings=settings, repository=graph_repository, graph_search=graph_search
         ),
     )
-    _add_node(builder, "tools", make_tools_node(settings=settings, executor=executor))
-    _add_node(
-        builder,
+    add("tools", make_tools_node(settings=settings, executor=executor))
+    add(
         "answer_composer",
         make_answer_composer_node(
             settings=settings,
@@ -169,7 +226,7 @@ def build_graph(
             course_name_provider=course_name,
         ),
     )
-    _add_node(builder, "safety_guardrail", make_safety_guardrail_node(settings=settings))
+    add("safety_guardrail", make_safety_guardrail_node(settings=settings))
 
     builder.add_edge(START, "intent_router")
     builder.add_edge("intent_router", "student_context")

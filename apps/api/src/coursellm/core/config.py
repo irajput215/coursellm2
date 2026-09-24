@@ -224,7 +224,15 @@ class Settings(BaseSettings):
     otel_enabled: bool = False
     otel_service_name: str = "coursellm-api"
     otel_exporter_otlp_endpoint: str = "http://localhost:4318"
+    # Which span exporter to construct: the OTLP/HTTP exporter, a pretty-printed
+    # console exporter for local debugging, or nothing. ``none`` is honoured even
+    # when ``otel_enabled`` is true so a deployment can disable export without
+    # changing its enablement intent.
+    otel_traces_exporter: Literal["otlp", "console", "none"] = "otlp"
     otel_sample_ratio: float = Field(default=1.0, ge=0.0, le=1.0)
+    # Evaluation runs must be reproducible, so they are always fully sampled
+    # (docs/architecture/observability.md section 3).
+    otel_sample_ratio_eval: float = Field(default=1.0, ge=0.0, le=1.0)
     metrics_enabled: bool = True
 
     langsmith_enabled: bool = False
