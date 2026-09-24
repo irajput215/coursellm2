@@ -6,6 +6,7 @@ creating the schema, so a model that is not re-exported here would be silently
 missing from migrations.
 """
 
+from coursellm.db.models.assessment import Quiz
 from coursellm.db.models.content import (
     EMBEDDING_DIM,
     Chunk,
@@ -77,6 +78,7 @@ __all__ = [
     "ProgressEvent",
     "ProgressEventKind",
     "QuarantineState",
+    "Quiz",
     "QuizAttempt",
     "RefreshTokenRevocation",
     "Resource",

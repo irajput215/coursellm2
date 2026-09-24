@@ -1,47 +1,45 @@
 """``create_quiz`` and ``evaluate_answer`` — the assessment write tools.
 
-Both are typed stubs: quiz and attempt persistence is PR 13. The contract, the
-permissions and the ``write`` side-effect class are real, so the permission
-matrix, the no-retry-on-write policy and the audit path are exercised now. Each
-handler returns a typed empty result with ``degraded=["tool_unavailable"]``
-rather than a plausible-looking item: a fabricated quiz item would be graded, and
-a fabricated grade is worse than an explicit failure.
+The handlers are thin: they validate that the executor handed them a
+tenant-scoped session, a gateway and an authenticated user, and then call
+:class:`~coursellm.assessment.service.AssessmentService`. No prompt, no grading
+arithmetic and no SQL lives here, which is what keeps the deterministic part of
+assessment behind a typed interface the agent cannot reach around.
+
+The contract is unchanged from the stub this replaces: the same tool names, the
+same required permissions, ``side_effects="write"`` and the same timeouts. Only
+the behaviour is real now. A model failure still returns a typed degraded result
+rather than an invented item or an invented grade, because the service never
+raises for a provider failure.
 """
 
 from __future__ import annotations
 
 import uuid
-from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from coursellm.assessment.schemas import (
+    AssessmentResult,
+    Difficulty,
+    ItemType,
+    QuizDraft,
+    QuizItem,
+    RubricCriterion,
+)
+from coursellm.assessment.service import AssessmentService
+from coursellm.db.tenancy import TenantScope
 from coursellm.tools.registry import (
     Permission,
+    RetryableToolError,
     ToolContext,
     ToolRegistry,
     ToolSpec,
 )
 
-Difficulty = Literal["easy", "medium", "hard"]
-ItemType = Literal["multiple_choice", "short_answer", "true_false"]
-
-_TOOL_UNAVAILABLE = ["tool_unavailable"]
-
 
 def _default_item_types() -> list[ItemType]:
     return ["multiple_choice"]
-
-
-class QuizItem(BaseModel):
-    """One generated quiz item, grounded in cited passages."""
-
-    item_id: str
-    prompt: str
-    item_type: ItemType
-    choices: list[str] = Field(default_factory=list)
-    answer: str | None = None
-    rubric: list[str] = Field(default_factory=list)
-    citation_ids: list[str] = Field(default_factory=list)
 
 
 class CreateQuizArgs(BaseModel):
@@ -56,15 +54,6 @@ class CreateQuizArgs(BaseModel):
     item_types: list[ItemType] = Field(default_factory=_default_item_types)
 
 
-class QuizDraft(BaseModel):
-    """A persisted quiz draft, or an empty one with a degradation reason."""
-
-    quiz_id: str | None = None
-    course_id: str
-    items: list[QuizItem] = Field(default_factory=list)
-    degraded: list[str] = Field(default_factory=list)
-
-
 class EvaluateAnswerArgs(BaseModel):
     """Arguments for ``evaluate_answer``."""
 
@@ -75,50 +64,75 @@ class EvaluateAnswerArgs(BaseModel):
     answer: str = Field(max_length=10_000)
 
 
-class RubricCriterion(BaseModel):
-    """One scored rubric line. No holistic score exists outside this list."""
-
-    criterion: str
-    met: bool
-    weight: float = Field(ge=0.0, le=1.0)
-
-
-class AssessmentResult(BaseModel):
-    """A scored answer with the mastery delta it implies."""
-
-    quiz_attempt_id: str
-    item_id: str
-    score: float | None = None
-    rubric: list[RubricCriterion] = Field(default_factory=list)
-    misconceptions: list[str] = Field(default_factory=list)
-    mastery_delta: float = 0.0
-    degraded: list[str] = Field(default_factory=list)
-
-
 async def create_quiz(args: CreateQuizArgs, ctx: ToolContext) -> QuizDraft:
-    """Return an empty quiz draft; persistence lands in PR 13."""
-    return QuizDraft(
-        quiz_id=None,
-        course_id=str(args.course_id),
-        items=[],
-        degraded=list(_TOOL_UNAVAILABLE),
+    """Generate and persist a grounded quiz draft for the calling student."""
+    _require_write_context(ctx, tool="create_quiz")
+    assert ctx.session is not None  # narrowed by _require_write_context
+    assert ctx.gateway is not None
+    assert ctx.user_id is not None
+    service = AssessmentService(ctx.session, TenantScope(ctx.tenant_id))
+    return await service.generate(
+        user_id=ctx.user_id,
+        settings=ctx.settings,
+        gateway=ctx.gateway,
+        course_id=args.course_id,
+        concept_ids=_parse_concept_ids(args.concept_ids),
+        n_items=args.n_items,
+        difficulty=args.difficulty,
+        item_types=args.item_types,
     )
 
 
 async def evaluate_answer(args: EvaluateAnswerArgs, ctx: ToolContext) -> AssessmentResult:
-    """Return an unscored result; rubric and progress persistence land in PR 13."""
-    return AssessmentResult(
-        quiz_attempt_id=str(args.quiz_attempt_id),
+    """Score one submission, record the attempt and write its progress event."""
+    _require_write_context(ctx, tool="evaluate_answer")
+    assert ctx.session is not None  # narrowed by _require_write_context
+    assert ctx.gateway is not None
+    assert ctx.user_id is not None
+    service = AssessmentService(ctx.session, TenantScope(ctx.tenant_id))
+    return await service.evaluate_existing_attempt(
+        attempt_id=args.quiz_attempt_id,
         item_id=args.item_id,
-        score=None,
-        rubric=[],
-        misconceptions=[],
-        mastery_delta=0.0,
-        degraded=list(_TOOL_UNAVAILABLE),
+        answer=args.answer,
+        user_id=ctx.user_id,
+        settings=ctx.settings,
+        gateway=ctx.gateway,
     )
 
 
+def _require_write_context(ctx: ToolContext, *, tool: str) -> None:
+    """Reject a call the executor could not have supplied a full context for.
+
+    A write tool without a session or a gateway cannot do its job, and inventing
+    a degraded result would hide an execution wiring bug behind a plausible
+    answer.
+    """
+    if ctx.session is None or ctx.gateway is None:
+        msg = f"{tool} requires a tenant-scoped session and a model gateway."
+        raise RetryableToolError(msg)
+    if ctx.user_id is None:
+        msg = f"{tool} requires an authenticated user."
+        raise RetryableToolError(msg)
+
+
+def _parse_concept_ids(values: list[str]) -> list[uuid.UUID]:
+    """Parse the caller's concept ids, dropping malformed ones rather than failing.
+
+    A malformed id cannot name a concept in the tenant's graph, so the generator
+    would skip it anyway; dropping it here keeps the failure at the boundary
+    rather than turning a quiz request into a validation error.
+    """
+    parsed: list[uuid.UUID] = []
+    for value in values:
+        try:
+            parsed.append(uuid.UUID(value))
+        except (ValueError, AttributeError, TypeError):
+            continue
+    return parsed
+
+
 def register(registry: ToolRegistry) -> None:
+    """Register the two assessment write tools into ``registry``."""
     registry.register(
         ToolSpec(
             name="create_quiz",
