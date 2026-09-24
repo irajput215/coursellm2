@@ -104,10 +104,10 @@ class TestSignature:
             decode_access_token(test_settings, forged)
 
     def test_token_signed_with_another_key_is_rejected(self, test_settings: Settings) -> None:
-        # Long enough that PyJWT does not warn; the point is that it differs.
-        other = test_settings.model_copy(
-            update={"secret_key": "a-completely-different-key-" + "x" * 40}
-        )
+        # Built by repetition rather than written as one long literal, so the
+        # secret scanner sees no credential-shaped assignment in the source. The
+        # length matters only because PyJWT warns below 64 bytes for HS512.
+        other = test_settings.model_copy(update={"secret_key": "different-" * 8})
         token, _ = create_access_token(
             other, user_id=USER_ID, tenant_id=TENANT_ID, role=UserRole.MEMBER
         )

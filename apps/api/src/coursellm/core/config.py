@@ -103,7 +103,10 @@ class Settings(BaseSettings):
 
     max_query_chars: int = Field(default=2000, ge=32, le=100_000)
     max_upload_bytes: int = Field(default=25 * 1024 * 1024, ge=1024)
-    allowed_upload_extensions: str = ".pdf,.txt,.md,.pptx,.docx"
+    # Must match what coursellm.rag.ingestion.parsers can actually parse.
+    # Advertising a type that has no parser turns a clear rejection at the
+    # boundary into a confusing failure after upload.
+    allowed_upload_extensions: str = ".pdf,.txt,.md,.markdown,.docx"
 
     injection_warn_threshold: float = Field(default=0.4, ge=0.0, le=1.0)
     injection_block_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
