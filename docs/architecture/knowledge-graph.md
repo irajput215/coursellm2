@@ -1288,3 +1288,32 @@ not be discoverable only from a behaviour change.
 configuration (model, prompt version, chunk-selection thresholds, weight set), recorded
 on every run so an extraction-quality regression is attributable to a specific
 configuration rather than to "the graph changed".
+
+---
+
+## 12. Deviations from this specification, and known gaps
+
+Recorded for the same reason as in [`agent-architecture.md`](agent-architecture.md) §14:
+a specification that quietly disagrees with the code makes every other claim in it
+unreliable.
+
+### 12.1 Deliberate additions
+
+| Addition | Why |
+|----------|-----|
+| `concepts.confidence` | Concept-level confidence is needed to rank "what should I learn first" when two prerequisites tie; the DDL omitted it. |
+| `concept_edges.provenance_sources` (JSONB) | The scalar provenance columns keep the *first* source, which is enough for display but not for corroboration. The JSONB set is what the confidence model counts, so corroboration is a stored fact rather than a re-query. |
+| `graph_extraction_runs.rejection_counts` (JSONB) | Per-gate rejection counts. Without them an operator can see that an extraction rejected 40 edges but not why, which makes the gates unauditable in practice. |
+| A `dependent_closure` CTE | `search_knowledge_graph(direction="dependents")` needs the reverse traversal. The spec described only the prerequisite direction. |
+| `plan_roadmap(strict=True)` | The spec returns an `unmet_cycle` marker. A marker is right for a user-facing roadmap, but callers that must not proceed need a hard failure, so both are offered and the default follows the spec. |
+| `plan_roadmap` tie-breaks by `slug` | A topological sort is not unique. Without a deterministic tie-break the same graph can produce two different roadmaps, which makes a roadmap diff meaningless. |
+
+### 12.2 Known gaps
+
+| Gap | Impact | Where it is closed |
+|-----|--------|--------------------|
+| The `GRAPH_*` knobs this document names (`GRAPH_AUTO_ACCEPT_CONFIDENCE`, `GRAPH_REVIEW_FLOOR_CONFIDENCE`, `GRAPH_LLM_CONFIDENCE_CAP`, the five `GRAPH_W_*` weights, `GRAPH_CROSS_COURSE_EDGES`, `GRAPH_EXTRACTION_PROMPT_VERSION`, `GRAPH_EXPANSION_K`, `GRAPH_RETRIEVAL_ENABLED`) are module constants rather than settings | The confidence model and thresholds cannot be tuned per environment without a code change, which is exactly what the evaluation harness needs to be able to vary. Note also that `GRAPH_MIN_EDGE_CONFIDENCE` (0.55) exists in settings but is **unused**, because the document's model has a separate review floor (0.50) and auto-accept threshold (0.75). | PR 23 hardening: promote the constants to settings and delete the unused one. |
+| There is no `graph:review` permission in the tool permission matrix | The review queue is reachable only through `search_knowledge_graph(include_below_threshold=True)`, which is constructed default-off and which no agent holds. A security test asserts that no agent can set it and that `GRAPH_WRITE` stays forbidden. A first-class permission would be cleaner. | PR 16 (AI security hardening), which owns the permission matrix. |
+| `knowledge_gap` takes a caller-supplied mastery map | The document's query joins `progress_events` and `quiz_attempts`, which do not exist yet, so the join cannot be written. The pure function is correct and tested; only its input source is deferred. | PR 13, which creates those tables. |
+| Graph edges are not yet a third ranked list in RRF | The repository and the tool are real, but `hybrid_search` fuses two lists. Graph neighbours are available to an agent as a *tool* rather than as a retrieval participant, so prerequisite questions are answered well while graph-augmented *ranking* is not yet exercised. | PR 14, alongside the evaluation harness that would measure whether the third list helps. Adding an unmeasured ranking signal is not an improvement. |
+| `documents.title` does not exist; the query uses `documents.filename` | Cosmetic, and the query is correct against the real schema. The document's DDL reference is what is wrong. | Corrected here rather than by adding a column for a doc typo. |

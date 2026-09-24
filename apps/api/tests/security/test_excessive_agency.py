@@ -185,14 +185,19 @@ class TestWebSearchIsOptIn:
 
 class TestGuardrailSecretStripping:
     async def test_a_planted_secret_never_reaches_the_user(self) -> None:
+        # Assembled at runtime rather than written as literals: the fixtures must
+        # look like credentials to the guardrail, and the secret scanner must not
+        # need an exception to tolerate them.
+        openai_key = f"sk-{'a' * 24}"
+        aws_key = f"AKIA{'A' * 16}"
+
         state = _state()
-        state["messages"] = [
-            AIMessage(content="The key is sk-abcdefghijklmnopqrstuvwx and AKIAABCDEFGHIJKLMNOP.")
-        ]
+        state["messages"] = [AIMessage(content=f"The key is {openai_key} and {aws_key}.")]
         result = await make_safety_guardrail_node(settings=_settings())(state)
+
         text = result["answer_draft"]["text"]
-        assert "sk-abcdefghijklmnopqrstuvwx" not in text
-        assert "AKIAABCDEFGHIJKLMNOP" not in text
+        assert openai_key not in text
+        assert aws_key not in text
         assert text.count("[redacted-secret]") >= 2
 
     async def test_instruction_content_fails_closed_and_is_flagged(self) -> None:

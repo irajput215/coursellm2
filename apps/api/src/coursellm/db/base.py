@@ -139,6 +139,10 @@ TENANT_SCOPED_TABLES: frozenset[str] = frozenset(
         "messages",
         "refresh_token_revocations",
         "llm_usage",
+        "concepts",
+        "concept_aliases",
+        "concept_edges",
+        "graph_extraction_runs",
     }
 )
 
