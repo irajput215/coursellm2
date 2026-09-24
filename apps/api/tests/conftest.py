@@ -12,7 +12,9 @@ Design notes:
 
 from __future__ import annotations
 
+import sys
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -20,6 +22,18 @@ from httpx import ASGITransport, AsyncClient
 from coursellm.api.app import create_app
 from coursellm.api.routers import health
 from coursellm.core.config import Environment, Settings
+
+# ``evals/`` lives at the repository root, outside the ``apps/api`` project that
+# owns this pytest configuration. The evaluation harness tests import it, and
+# pytest puts the first directory without an ``__init__.py`` on ``sys.path`` —
+# which is ``apps/api``, not the repository root. The root is added explicitly
+# here rather than through an environment variable so that
+# ``cd apps/api && pytest`` works exactly as the Makefile and CI invoke it. The
+# insertion sits below the application imports so it does not split an import
+# block.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 
 @pytest.fixture

@@ -1,0 +1,59 @@
+# Root-level tool configuration for the repository-level ``evals/`` package.
+#
+# Rationale for a root config rather than extending ``apps/api/pyproject.toml``:
+# ``evals/`` lives outside the ``apps/api`` project, and both ruff and mypy
+# discover their configuration from the directory of the file being checked
+# (ruff) or from the configuration file nearest the working directory (mypy).
+# Running ``ruff check apps/api evals`` and ``mypy evals`` from the repository
+# root therefore needs a configuration that covers ``evals/`` without passing
+# ``--config`` on every invocation. The settings below mirror
+# ``apps/api/pyproject.toml`` so the two halves are held to the same standard.
+#
+# This file intentionally has no ``[project]`` table; it is configuration only.
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["evals", "apps/api/src"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "SIM",  # flake8-simplify
+    "TID",  # flake8-tidy-imports
+    "RUF",  # ruff-specific
+    "ASYNC",
+    "S",    # flake8-bandit
+    "PT",   # flake8-pytest-style
+]
+ignore = [
+    "S101",   # assert is fine in tests
+    "RUF012", # ClassVar annotations not required for pydantic models
+]
+
+[tool.ruff.lint.per-file-ignores]
+"evals/**" = []
+
+[tool.ruff.lint.isort]
+known-first-party = ["coursellm", "evals"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+disallow_untyped_defs = true
+plugins = ["pydantic.mypy"]
+# Third-party libraries without stubs, including ``coursellm`` when it is
+# imported from an installed wheel without a ``py.typed`` marker.
+ignore_missing_imports = true
+# Resolve ``coursellm`` to its source so the evaluation code is type-checked
+# against the real interfaces rather than treated as ``Any``.
+mypy_path = "apps/api/src"
+explicit_package_bases = true

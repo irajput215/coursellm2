@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from sqlalchemy import text
@@ -130,6 +131,7 @@ async def rls_enforcement_status(session: AsyncSession) -> dict[str, Any]:
     }
 
 
+@asynccontextmanager
 async def session_scope(settings: Settings) -> AsyncIterator[AsyncSession]:
     """Open a session in a transaction. For use outside the request cycle.
 

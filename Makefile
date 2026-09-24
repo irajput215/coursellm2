@@ -67,21 +67,22 @@ install-web: ## Install frontend dependencies
 # ---------------------------------------------------------------------------
 .PHONY: fmt
 fmt: ## Format Python and frontend sources
-	$(VENV)/bin/ruff format $(API_DIR)
-	$(VENV)/bin/ruff check --fix $(API_DIR)
+	$(VENV)/bin/ruff format $(API_DIR) evals
+	$(VENV)/bin/ruff check --fix $(API_DIR) evals
 
 .PHONY: lint
 lint: ## Lint Python sources
-	$(VENV)/bin/ruff check $(API_DIR)
-	$(VENV)/bin/ruff format --check $(API_DIR)
+	$(VENV)/bin/ruff check $(API_DIR) evals
+	$(VENV)/bin/ruff format --check $(API_DIR) evals
 
 .PHONY: lint-web
 lint-web: ## Lint the frontend
 	cd $(WEB_DIR) && npm run lint
 
 .PHONY: typecheck
-typecheck: ## Type-check the backend
+typecheck: ## Type-check the backend and the evaluation harness
 	cd $(API_DIR) && ../../$(VENV)/bin/mypy src
+	$(VENV)/bin/mypy evals
 
 .PHONY: typecheck-web
 typecheck-web: ## Type-check the frontend
