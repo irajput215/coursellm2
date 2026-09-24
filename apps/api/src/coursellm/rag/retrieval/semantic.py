@@ -129,7 +129,14 @@ async def semantic_search(
                 ChunkEmbedding.embedding_model == resolved.model_id,
                 ChunkEmbedding.dim == resolved.dim,
             )
-            .order_by(distance)
+            # Ordered by distance, then by chunk id. The secondary key is not
+            # cosmetic: pgvector distances tie often on small corpora and under
+            # the hashing embedder, and without a deterministic tie-break the
+            # database may return tied rows in any order. That makes a rank-based
+            # fusion stage (RRF) non-reproducible between two runs of the same
+            # query, which in turn makes an evaluation regression unattributable.
+            # The lexical retriever already tie-breaks this way.
+            .order_by(distance, Chunk.id)
             .limit(k)
         )
         rows = (await session.execute(statement, params)).mappings().all()
