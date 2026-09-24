@@ -201,27 +201,47 @@ tokens, and `avgdl` the tenant mean chunk length. Defaults `k1 = 1.2`, `b = 0.75
 
 | Table | Columns | Purpose |
 |-------|---------|---------|
-| `chunk_terms` | `chunk_id, tenant_id, term, tf` | Per-chunk term frequencies (PK `chunk_id, term`) |
+| `chunk_terms` | `chunk_id, tenant_id, term, tf` | Per-chunk term frequencies (PK `chunk_id, term`; B-tree on `tenant_id, term`) |
 | `tenant_lexical_stats` | `tenant_id, term, doc_freq` | Document frequency per term, per tenant |
 | `tenant_corpus_stats` | `tenant_id, doc_count, avg_doc_len, total_tokens` | Corpus-level constants |
 
-`chunk_terms` carries a GIN index on a generated `tsvector` companion column so the
-candidate set is found by index rather than a sequential scan; BM25 then rescores only
-the candidates.
+Candidate selection is served by a B-tree index on `(tenant_id, term)`, and the query
+predicate is an equality against an array of terms:
 
 ```sql
 WITH candidates AS (
     SELECT ct.chunk_id, ct.term, ct.tf
     FROM   chunk_terms ct
     WHERE  ct.tenant_id = :tenant_id
-      AND  ct.tsv @@ to_tsquery('english', :tsquery)
+      AND  ct.term = ANY(:query_terms)
 )
 SELECT ...
 ```
 
-Terms are produced by the same analyser at index and query time (lowercase, stopword
-removal, light stemming via the `english` configuration), so the term sets are
-comparable.
+**Why a stored bag-of-words table rather than `tsvector` and `to_tsvector`.** Two
+reasons, and the second is the important one.
+
+1. BM25 needs term frequencies, document length and corpus-level document frequencies.
+   A `tsvector` stores lexemes with positions but not the per-tenant document-frequency
+   statistics a score requires, so those tables would be needed either way.
+2. Tokenisation must be **identical** at index time and query time. Using PostgreSQL's
+   `english` configuration would put that symmetry out of reach of the application: the
+   analyser's stemming and stopword list become a property of the database
+   configuration, so a `search_path`, extension upgrade or locale change could alter it
+   without a code change. Analysing in Python makes the symmetry a unit-tested
+   property.
+
+The analyser deliberately does **no stemming** and preserves identifier characters, so
+`ef_construction`, `bge-reranker-base`, `gpt-4o` and `c++` each survive as a single
+term. That is the point of having lexical retrieval at all: dense vectors blur exactly
+these tokens, and a stemmer would fold `HNSW` and a related word together while
+splitting nothing useful.
+
+Terms are produced by the same analyser at index and query time (Unicode NFKC
+normalisation, lowercasing, stopword removal for indexing), so the term sets are
+comparable by construction. A query consisting only of stopwords falls back to the
+unfiltered terms rather than producing an empty term list and therefore an empty result
+set.
 
 ### Why BM25 at all, given embeddings?
 
