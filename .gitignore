@@ -76,10 +76,13 @@ evals/cache/
 # Infrastructure
 # ---------------------------------------------------------------------------
 **/.terraform/*
+# The provider lock file IS committed deliberately: it pins provider versions
+# and checksums so `terraform init` resolves the same providers on every machine.
+# Only the plugin cache directory is ignored.
+!.terraform.lock.hcl
 *.tfstate
 *.tfstate.*
 *.tfplan
-.terraform.lock.hcl
 crash.log
 override.tf
 override.tf.json
