@@ -14,8 +14,8 @@ Two guarantees are enforced here rather than trusted to the model:
   greater of the caller's ``min_confidence`` and
   ``GRAPH_MIN_TRAVERSABLE_CONFIDENCE``, so a model that passes ``0.0`` cannot
   widen the traversal. Inspecting unverified/review-queue edges requires the
-  ``graph:review`` capability, which no agent holds (it is not in the permission
-  matrix and is not a member of :class:`~coursellm.tools.registry.Permission`).
+  ``graph:review`` capability, which no agent holds (it is a declared
+  :class:`~coursellm.tools.registry.Permission` member, granted to no agent).
 
 ``NullKnowledgeGraphRepository`` remains as the honest empty answer when there is
 no session at all: an empty prerequisite set is a truthful statement about a graph
@@ -41,10 +41,11 @@ from coursellm.tools.registry import (
 
 Direction = Literal["prerequisites", "dependents", "both"]
 
-#: The capability required to see review-queue edges in traversal. Declared here
-#: rather than in the permission matrix because no agent may hold it; adding it
-#: to :class:`Permission` would be an existing-file change this PR does not make.
-REVIEW_PERMISSION = "graph:review"
+#: The capability required to see review-queue edges in traversal. It is a
+#: first-class :class:`~coursellm.tools.registry.Permission` member and no agent
+#: holds it, so a model-chosen tool argument can never widen traversal to the
+#: review queue; the review UI supplies it explicitly.
+REVIEW_PERMISSION = Permission.GRAPH_REVIEW
 
 
 class SearchKnowledgeGraphArgs(BaseModel):

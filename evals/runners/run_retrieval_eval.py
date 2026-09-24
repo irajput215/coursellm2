@@ -580,6 +580,11 @@ async def _ingest_corpus(
                 document=document,
                 data=corpus_document.data,
                 embedder=embedder,
+                # The evaluation corpus is curated and version-controlled, and it
+                # deliberately contains prompt-injection *examples*. The detector
+                # still records their score and classes, but a blunt quarantine
+                # would remove the evidence the corpus exists to provide.
+                quarantine_enabled=False,
             )
             chunk_total += result.chunk_count
             anchors.append(

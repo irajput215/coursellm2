@@ -19,7 +19,7 @@ import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Annotated
 
-from fastapi import Depends
+from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,6 +31,12 @@ from coursellm.db.session import get_session_factory
 from coursellm.db.tenancy import TenantContext, tenant_session
 from coursellm.repositories.content import CourseRepository, DocumentRepository
 from coursellm.repositories.identity import UserRepository
+from coursellm.security.ratelimit import (
+    RateLimiter,
+    RateLimitExceededError,
+    get_rate_limiter,
+    user_key,
+)
 from coursellm.security.tokens import decode_access_token
 
 # ``auto_error=False`` so a missing header produces our own error envelope with a
@@ -101,6 +107,101 @@ async def get_tenant_session(
 
 
 TenantSessionDep = Annotated[AsyncSession, Depends(get_tenant_session)]
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting
+#
+# Two ceilings share one primitive: a per-minute limit on every API route and an
+# hourly limit on the LLM-backed routes (``security.md`` section 11). The key is
+# derived from the *authenticated* token when one is present and falls back to
+# the client address, so ``POST /auth/token`` — which has no context by
+# definition and is brute-forceable — is limited too. The token decode here is
+# best-effort and never raises: an invalid token is simply not an identity, and
+# the route's own authentication dependency produces the 401.
+# ---------------------------------------------------------------------------
+async def get_rate_limiter_dep(settings: SettingsDep) -> RateLimiter:
+    """Resolve the process limiter. Overridden in tests that exercise limiting."""
+    return get_rate_limiter(settings)
+
+
+RateLimiterDep = Annotated[RateLimiter, Depends(get_rate_limiter_dep)]
+
+
+def _limiter_principal(
+    settings: Settings,
+    credentials: HTTPAuthorizationCredentials | None,
+    request: Request,
+) -> str:
+    """A stable limiter key: the authenticated subject, or the client address."""
+    if credentials is not None and credentials.credentials:
+        try:
+            claims = decode_access_token(settings, credentials.credentials)
+        except Exception:
+            claims = None
+        if claims is not None:
+            return f"user:{claims.subject}"
+    host = getattr(getattr(request, "client", None), "host", None) or "anonymous"
+    return f"ip:{host}"
+
+
+async def _enforce(
+    *,
+    settings: Settings,
+    credentials: HTTPAuthorizationCredentials | None,
+    request: Request,
+    limiter: RateLimiter,
+    scope: str,
+    limit: int,
+    window_seconds: int,
+    detail: str,
+) -> None:
+    if not settings.rate_limit_enabled:
+        return
+    principal = _limiter_principal(settings, credentials, request)
+    decision = await limiter.check(
+        user_key(principal, scope=scope), limit=limit, window_seconds=window_seconds
+    )
+    if not decision.allowed:
+        raise RateLimitExceededError(detail, retry_after=decision.retry_after)
+
+
+async def enforce_request_rate_limit(
+    request: Request,
+    settings: SettingsDep,
+    limiter: RateLimiterDep,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
+) -> None:
+    """Per-user (or per-address) request ceiling, applied to every API route."""
+    await _enforce(
+        settings=settings,
+        credentials=credentials,
+        request=request,
+        limiter=limiter,
+        scope="requests",
+        limit=settings.rate_limit_requests_per_minute,
+        window_seconds=60,
+        detail="Too many requests. Please retry after the interval in the Retry-After header.",
+    )
+
+
+async def enforce_llm_rate_limit(
+    request: Request,
+    settings: SettingsDep,
+    limiter: RateLimiterDep,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
+) -> None:
+    """Per-user ceiling on LLM-backed turns, applied to the generation routes."""
+    await _enforce(
+        settings=settings,
+        credentials=credentials,
+        request=request,
+        limiter=limiter,
+        scope="llm",
+        limit=settings.rate_limit_llm_requests_per_hour,
+        window_seconds=3600,
+        detail="Hourly model-request limit reached. Retry after the interval in Retry-After.",
+    )
 
 
 def require_role(

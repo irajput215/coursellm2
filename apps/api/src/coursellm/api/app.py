@@ -12,13 +12,19 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from coursellm import __version__
 from coursellm.api.routers import health, metrics
 from coursellm.core.config import Environment, Settings, get_settings
-from coursellm.core.errors import register_exception_handlers
+from coursellm.core.errors import (
+    HTTP_429_TOO_MANY_REQUESTS,
+    ErrorResponse,
+    RateLimitError,
+    register_exception_handlers,
+)
 from coursellm.core.logging import configure_logging, get_logger
 from coursellm.middleware import (
     REQUEST_ID_HEADER,
@@ -182,12 +188,40 @@ async def _shutdown() -> None:
         pass
 
 
+def _register_rate_limit_handler(app: FastAPI) -> None:
+    """Return the standard error envelope *and* a ``Retry-After`` header.
+
+    The generic domain-error handler cannot set a header, and ``Retry-After`` is
+    part of the rate-limit contract a client relies on to back off correctly, so
+    a more specific handler is registered for the rate-limit error. Starlette
+    resolves handlers by walking the exception's MRO, so subclasses such as the
+    limiter's ``RateLimitExceededError`` are covered too.
+    """
+
+    @app.exception_handler(RateLimitError)
+    async def _rate_limited(request: Request, exc: RateLimitError) -> JSONResponse:
+        retry_after = getattr(exc, "retry_after", None)
+        headers: dict[str, str] | None = None
+        if isinstance(retry_after, int) and retry_after > 0:
+            headers = {"Retry-After": str(retry_after)}
+        return JSONResponse(
+            status_code=HTTP_429_TOO_MANY_REQUESTS,
+            content=ErrorResponse(
+                error=exc.error_code,
+                detail=exc.detail,
+                request_id=getattr(request.state, "request_id", None),
+            ).model_dump(exclude_none=True),
+            headers=headers,
+        )
+
+
 def _build_api_router() -> APIRouter:
     """Assemble the versioned API surface.
 
     Domain routers are added here as they are implemented, so the public surface
     is auditable in one place rather than inferred from filesystem discovery.
     """
+    from coursellm.api.deps import enforce_request_rate_limit
     from coursellm.api.routers import (
         assessments,
         auth,
@@ -197,7 +231,9 @@ def _build_api_router() -> APIRouter:
         roadmaps,
     )
 
-    router = APIRouter()
+    # The per-minute ceiling is attached at the router, not repeated per route,
+    # so a new endpoint is limited by construction rather than by remembering.
+    router = APIRouter(dependencies=[Depends(enforce_request_rate_limit)])
     router.include_router(auth.router)
     router.include_router(courses.router)
     router.include_router(chat.router)
@@ -298,6 +334,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
 
     register_exception_handlers(app)
+    _register_rate_limit_handler(app)
 
     app.include_router(health.router)
     # ``/metrics`` is root-level rather than under the API prefix: a Prometheus

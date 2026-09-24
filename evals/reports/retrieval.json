@@ -41,16 +41,16 @@
     "unanswerable_entries": 4
   },
   "degradation_reasons": {},
-  "duration_s": 1.338388,
+  "duration_s": 0.864962,
   "environment": {
     "machine": "Ishus-MacBook-Air.local",
     "platform": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
     "processor": "arm",
     "python": "3.13.7"
   },
-  "finished_at": "2026-09-24T19:42:34.920338+00:00",
+  "finished_at": "2026-09-24T20:19:30.328280+00:00",
   "generation_mode": "none",
-  "git_sha": "1d94094fde8830bbbe4260033ce674af3d557e22",
+  "git_sha": "f69c2f9e85bc27c63aee79a51da3b9cf52b89c5d",
   "judge": "none",
   "kind": "retrieval",
   "metrics": {
@@ -66,18 +66,18 @@
     "retrieval.semantic_recall_at_20": 1.0,
     "system.degradation_rate": 0.0,
     "system.error_rate": 0.0,
-    "system.fusion_p50_ms": 0.179125,
-    "system.fusion_p95_ms": 0.2685,
-    "system.fusion_p99_ms": 0.276542,
-    "system.lexical_p50_ms": 17.618209,
-    "system.lexical_p95_ms": 33.904958,
-    "system.lexical_p99_ms": 38.178875,
-    "system.rerank_p50_ms": 2.421333,
-    "system.rerank_p95_ms": 3.216833,
-    "system.rerank_p99_ms": 3.426834,
-    "system.semantic_p50_ms": 0.957291,
-    "system.semantic_p95_ms": 2.244209,
-    "system.semantic_p99_ms": 5.841041
+    "system.fusion_p50_ms": 0.064291,
+    "system.fusion_p95_ms": 0.08125,
+    "system.fusion_p99_ms": 0.08675,
+    "system.lexical_p50_ms": 6.137834,
+    "system.lexical_p95_ms": 9.079125,
+    "system.lexical_p99_ms": 10.696959,
+    "system.rerank_p50_ms": 1.338416,
+    "system.rerank_p95_ms": 1.681917,
+    "system.rerank_p99_ms": 1.692084,
+    "system.semantic_p50_ms": 1.356833,
+    "system.semantic_p95_ms": 2.450042,
+    "system.semantic_p99_ms": 4.302875
   },
   "not_measured": {
     "citations.hallucination_rate": "no_generation",
@@ -117,10 +117,10 @@
       "id": "q001",
       "judge_scores": {},
       "latency_ms": {
-        "fusion": 0.112917,
-        "lexical": 33.904958,
-        "rerank": 2.064959,
-        "semantic": 5.841041
+        "fusion": 0.08675,
+        "lexical": 7.941209,
+        "rerank": 1.527292,
+        "semantic": 4.302875
       },
       "metrics": {
         "retrieval.context_precision": 1.0,
@@ -207,10 +207,10 @@
       "id": "q002",
       "judge_scores": {},
       "latency_ms": {
-        "fusion": 0.099792,
-        "lexical": 21.244791,
-        "rerank": 1.995291,
-        "semantic": 2.244209
+        "fusion": 0.069958,
+        "lexical": 4.290916,
+        "rerank": 1.49375,
+        "semantic": 1.892459
       },
       "metrics": {
         "retrieval.context_precision": 1.0,
@@ -297,10 +297,10 @@
       "id": "q003",
       "judge_scores": {},
       "latency_ms": {
-        "fusion": 0.067708,
-        "lexical": 26.39025,
-        "rerank": 1.385417,
-        "semantic": 2.107792
+        "fusion": 0.073667,
+        "lexical": 6.689833,
+        "rerank": 1.498459,
+        "semantic": 1.945041
       },
       "metrics": {
         "retrieval.context_precision": 0.8333333333333333,
@@ -358,7 +358,7 @@
           "document": "prompt-injection-in-retrieval.md",
           "lexical_rank": 5,
           "rank": 5,
-          "rerank_score": 0.304604,
+          "rerank_score": 0.305392,
           "score": 0.02967032967032967,
           "semantic_rank": 10
         }
@@ -387,10 +387,10 @@
       "id": "q004",
       "judge_scores": {},
       "latency_ms": {
-        "fusion": 0.058041,
-        "lexical": 24.468583,
-        "rerank": 1.192792,
-        "semantic": 1.606333
+        "fusion": 0.068083,
+        "lexical": 6.74575,
+        "rerank": 1.490166,
+        "semantic": 1.860208
       },
       "metrics": {
         "retrieval.context_precision": 1.0,
@@ -477,10 +477,10 @@
       "id": "q005",
       "judge_scores": {},
       "latency_ms": {
-        "fusion": 0.046083,
-        "lexical": 19.047417,
-        "rerank": 0.934416,
-        "semantic": 1.435417
+        "fusion": 0.078917,
+        "lexical": 6.806666,
+        "rerank": 1.528916,
+        "semantic": 1.905291
       },
       "metrics": {
         "retrieval.context_precision": 1.0,
@@ -567,10 +567,10 @@
       "id": "q006",
       "judge_scores": {},
       "latency_ms": {
-        "fusion": 0.04375,
-        "lexical": 11.413666,
-        "rerank": 2.128875,
-        "semantic": 1.08225
+        "fusion": 0.068334,
+        "lexical": 4.937292,
+        "rerank": 1.49525,
+        "semantic": 2.073292
       },
       "metrics": {
         "retrieval.context_precision": 1.0,
@@ -657,10 +657,10 @@
       "id": "q007",
       "judge_scores": {},
       "latency_ms": {
-        "fusion": 0.041958,
-        "lexical": 7.414583,
-        "rerank": 1.494334,
-        "semantic": 0.89725
+        "fusion": 0.065208,
+        "lexical": 4.579792,
+        "rerank": 1.471125,
+        "semantic": 1.381375
       },
       "metrics": {
         "retrieval.context_precision": 0.8333333333333333,
@@ -709,9 +709,9 @@
           "document": "prompt-injection-in-retrieval.md",
           "lexical_rank": 4,
           "rank": 4,
-          "rerank_score": 0.050767,
-          "score": 0.031009615384615385,
-          "semantic_rank": 5
+          "rerank_score": 0.050899,
+          "score": 0.03055037313432836,
+          "semantic_rank": 7
         },
         {
           "chunk_id": "00000000-0000-0000-0000-000000000005",
@@ -747,10 +747,10 @@
       "id": "q008",
       "judge_scores": {},
       "latency_ms": {
-        "fusion": 0.276542,
-        "lexical": 28.861917,
-        "rerank": 3.426834,
-        "semantic": 0.993958
+        "fusion": 0.071709,
+        "lexical": 9.079125,
+        "rerank": 1.483209,
+        "semantic": 1.373166
       },
       "metrics": {
         "retrieval.context_precision": 1.0,
@@ -837,10 +837,10 @@
       "id": "q009",
       "judge_scores": {},
       "latency_ms": {
-        "fusion": 0.139291,
-        "lexical": 5.755958,
-        "rerank": 2.523875,
-        "semantic": 0.948375
+        "fusion": 0.065708,
+        "lexical": 3.970167,
+        "rerank": 1.483041,
+        "semantic": 1.493542
       },
       "metrics": {
         "retrieval.context_precision": 1.0,
@@ -927,10 +927,10 @@
       "id": "q010",
       "judge_scores": {},
       "latency_ms": {
-        "fusion": 0.174208,
-        "lexical": 13.93375,
-        "rerank": 1.550333,
-        "semantic": 0.93375
+        "fusion": 0.080458,
+        "lexical": 6.042,
+        "rerank": 1.676084,
+        "semantic": 2.450042
       },
       "metrics": {
         "retrieval.context_precision": 1.0,
@@ -1017,10 +1017,10 @@
       "id": "q011",
       "judge_scores": {},
       "latency_ms": {
-        "fusion": 0.046792,
-        "lexical": 12.006,
-        "rerank": 2.006875,
-        "semantic": 0.884542
+        "fusion": 0.08125,
+        "lexical": 5.499417,
+        "rerank": 1.681917,
+        "semantic": 1.535458
       },
       "metrics": {
         "retrieval.context_precision": 1.0,
@@ -1107,10 +1107,10 @@
       "id": "q012",
       "judge_scores": {},
       "latency_ms": {
-        "fusion": 0.182166,
-        "lexical": 20.986958,
-        "rerank": 3.047458,
-        "semantic": 0.917625
+        "fusion": 0.078792,
+        "lexical": 7.290833,
+        "rerank": 1.692084,
+        "semantic": 1.299083
       },
       "metrics": {
         "retrieval.context_precision": 0.7,
@@ -1150,7 +1150,7 @@
           "document": "prompt-injection-in-retrieval.md",
           "lexical_rank": 4,
           "rank": 3,
-          "rerank_score": 0.152302,
+          "rerank_score": 0.152696,
           "score": 0.029910714285714284,
           "semantic_rank": 10
         },
@@ -1197,10 +1197,10 @@
       "id": "q013",
       "judge_scores": {},
       "latency_ms": {
-        "fusion": 0.225,
-        "lexical": 38.178875,
-        "rerank": 3.186375,
-        "semantic": 1.185459
+        "fusion": 0.065833,
+        "lexical": 10.696959,
+        "rerank": 1.338416,
+        "semantic": 1.464958
       },
       "metrics": {
         "retrieval.context_precision": 0.8333333333333333,
@@ -1232,8 +1232,8 @@
           "lexical_rank": 3,
           "rank": 2,
           "rerank_score": 0.420471,
-          "score": 0.031024531024531024,
-          "semantic_rank": 6
+          "score": 0.030798389007344232,
+          "semantic_rank": 7
         },
         {
           "chunk_id": "00000000-0000-0000-0000-000000000025",
@@ -1288,10 +1288,10 @@
       "id": "q014",
       "judge_scores": {},
       "latency_ms": {
-        "fusion": 0.149667,
-        "lexical": 10.881958,
-        "rerank": 2.463583,
-        "semantic": 1.053375
+        "fusion": 0.056459,
+        "lexical": 4.332833,
+        "rerank": 1.215625,
+        "semantic": 1.36125
       },
       "metrics": {
         "retrieval.context_precision": 1.0,
@@ -1378,10 +1378,10 @@
       "id": "q015",
       "judge_scores": {},
       "latency_ms": {
-        "fusion": 0.2685,
-        "lexical": 8.096292,
-        "rerank": 2.421333,
-        "semantic": 0.977709
+        "fusion": 0.051417,
+        "lexical": 3.986375,
+        "rerank": 1.122167,
+        "semantic": 1.354542
       },
       "metrics": {
         "retrieval.context_precision": 1.0,
@@ -1468,10 +1468,10 @@
       "id": "q016",
       "judge_scores": {},
       "latency_ms": {
-        "fusion": 0.047541,
-        "lexical": 4.555833,
-        "rerank": 0.963708,
-        "semantic": 0.893709
+        "fusion": 0.050958,
+        "lexical": 2.934417,
+        "rerank": 1.114542,
+        "semantic": 1.215
       },
       "metrics": {
         "retrieval.context_precision": 1.0,
@@ -1520,7 +1520,7 @@
           "document": "prompt-injection-in-retrieval.md",
           "lexical_rank": 3,
           "rank": 4,
-          "rerank_score": 0.050767,
+          "rerank_score": 0.050899,
           "score": 0.03125763125763126,
           "semantic_rank": 5
         },
@@ -1558,10 +1558,10 @@
       "id": "q017",
       "judge_scores": {},
       "latency_ms": {
-        "fusion": 0.157708,
-        "lexical": 8.670167,
-        "rerank": 2.614917,
-        "semantic": 0.9325
+        "fusion": 0.051292,
+        "lexical": 3.942,
+        "rerank": 1.11825,
+        "semantic": 1.085875
       },
       "metrics": {
         "retrieval.context_precision": 1.0,
@@ -1648,10 +1648,10 @@
       "id": "q018",
       "judge_scores": {},
       "latency_ms": {
-        "fusion": 0.151917,
-        "lexical": 10.4705,
-        "rerank": 2.4985,
-        "semantic": 0.953459
+        "fusion": 0.0495,
+        "lexical": 4.2785,
+        "rerank": 1.125334,
+        "semantic": 1.153125
       },
       "metrics": {
         "retrieval.context_precision": 1.0,
@@ -1673,7 +1673,7 @@
           "document": "prompt-injection-in-retrieval.md",
           "lexical_rank": 1,
           "rank": 1,
-          "rerank_score": 0.913812,
+          "rerank_score": 0.916176,
           "score": 0.03278688524590164,
           "semantic_rank": 1
         },
@@ -1738,10 +1738,10 @@
       "id": "q019",
       "judge_scores": {},
       "latency_ms": {
-        "fusion": 0.183375,
-        "lexical": 14.941916,
-        "rerank": 2.4775,
-        "semantic": 0.969875
+        "fusion": 0.054625,
+        "lexical": 5.346333,
+        "rerank": 1.213416,
+        "semantic": 1.155541
       },
       "metrics": {
         "retrieval.context_precision": 0.7,
@@ -1763,7 +1763,7 @@
           "document": "prompt-injection-in-retrieval.md",
           "lexical_rank": 1,
           "rank": 1,
-          "rerank_score": 1.015346,
+          "rerank_score": 1.017973,
           "score": 0.03278688524590164,
           "semantic_rank": 1
         },
@@ -1828,10 +1828,10 @@
       "id": "q020",
       "judge_scores": {},
       "latency_ms": {
-        "fusion": 0.184958,
-        "lexical": 20.326542,
-        "rerank": 2.921791,
-        "semantic": 0.965375
+        "fusion": 0.060167,
+        "lexical": 7.116,
+        "rerank": 1.223125,
+        "semantic": 1.231167
       },
       "metrics": {
         "retrieval.context_precision": 1.0,
@@ -1918,10 +1918,10 @@
       "id": "q021",
       "judge_scores": {},
       "latency_ms": {
-        "fusion": 0.212917,
-        "lexical": 17.367666,
-        "rerank": 2.37525,
-        "semantic": 0.882292
+        "fusion": 0.059042,
+        "lexical": 5.836459,
+        "rerank": 1.225,
+        "semantic": 1.29575
       },
       "metrics": {
         "retrieval.context_precision": 1.0,
@@ -2008,10 +2008,10 @@
       "id": "q022",
       "judge_scores": {},
       "latency_ms": {
-        "fusion": 0.191334,
-        "lexical": 23.635417,
-        "rerank": 2.971417,
-        "semantic": 0.932
+        "fusion": 0.058208,
+        "lexical": 7.911584,
+        "rerank": 1.229417,
+        "semantic": 1.184959
       },
       "metrics": {
         "retrieval.context_precision": 1.0,
@@ -2098,10 +2098,10 @@
       "id": "q023",
       "judge_scores": {},
       "latency_ms": {
-        "fusion": 0.184583,
-        "lexical": 23.815333,
-        "rerank": 3.216833,
-        "semantic": 0.966792
+        "fusion": 0.063334,
+        "lexical": 7.202875,
+        "rerank": 1.337375,
+        "semantic": 1.172083
       },
       "metrics": {
         "retrieval.context_precision": 1.0,
@@ -2150,7 +2150,7 @@
           "document": "prompt-injection-in-retrieval.md",
           "lexical_rank": 6,
           "rank": 4,
-          "rerank_score": 0.152302,
+          "rerank_score": 0.152696,
           "score": 0.029437229437229435,
           "semantic_rank": 10
         },
@@ -2188,10 +2188,10 @@
       "id": "q024",
       "judge_scores": {},
       "latency_ms": {
-        "fusion": 0.188125,
-        "lexical": 17.618209,
-        "rerank": 3.052458,
-        "semantic": 0.957291
+        "fusion": 0.061042,
+        "lexical": 5.848917,
+        "rerank": 1.342959,
+        "semantic": 1.387333
       },
       "metrics": {
         "retrieval.context_precision": 1.0,
@@ -2279,10 +2279,10 @@
       "id": "q025",
       "judge_scores": {},
       "latency_ms": {
-        "fusion": 0.196625,
-        "lexical": 15.023208,
-        "rerank": 2.709083,
-        "semantic": 0.97275
+        "fusion": 0.058292,
+        "lexical": 5.031625,
+        "rerank": 1.347834,
+        "semantic": 1.286083
       },
       "metrics": {
         "retrieval.context_precision": 1.0,
@@ -2313,7 +2313,7 @@
           "document": "prompt-injection-in-retrieval.md",
           "lexical_rank": 3,
           "rank": 2,
-          "rerank_score": 0.203069,
+          "rerank_score": 0.203595,
           "score": 0.03036576949620428,
           "semantic_rank": 9
         },
@@ -2370,10 +2370,10 @@
       "id": "q026",
       "judge_scores": {},
       "latency_ms": {
-        "fusion": 0.210792,
-        "lexical": 19.651542,
-        "rerank": 1.915583,
-        "semantic": 0.922042
+        "fusion": 0.062542,
+        "lexical": 6.369167,
+        "rerank": 1.353916,
+        "semantic": 1.269333
       },
       "metrics": {
         "retrieval.context_precision": 0.7,
@@ -2422,7 +2422,7 @@
           "document": "prompt-injection-in-retrieval.md",
           "lexical_rank": 4,
           "rank": 4,
-          "rerank_score": 0.203069,
+          "rerank_score": 0.203595,
           "score": 0.030330882352941176,
           "semantic_rank": 8
         },
@@ -2461,10 +2461,10 @@
       "id": "q027",
       "judge_scores": {},
       "latency_ms": {
-        "fusion": 0.179125,
-        "lexical": 24.050334,
-        "rerank": 2.7615,
-        "semantic": 0.940334
+        "fusion": 0.063375,
+        "lexical": 7.361458,
+        "rerank": 1.331666,
+        "semantic": 1.243708
       },
       "metrics": {
         "retrieval.context_precision": 1.0,
@@ -2522,7 +2522,7 @@
           "document": "prompt-injection-in-retrieval.md",
           "lexical_rank": 4,
           "rank": 5,
-          "rerank_score": 0.101535,
+          "rerank_score": 0.101797,
           "score": 0.029513888888888888,
           "semantic_rank": 12
         }
@@ -2551,10 +2551,10 @@
       "id": "q028",
       "judge_scores": {},
       "latency_ms": {
-        "fusion": 0.067958,
-        "lexical": 16.874166,
-        "rerank": 1.45875,
-        "semantic": 0.938
+        "fusion": 0.0635,
+        "lexical": 6.316375,
+        "rerank": 1.334583,
+        "semantic": 1.281167
       },
       "metrics": {
         "retrieval.context_precision": 1.0,
@@ -2639,10 +2639,10 @@
       "id": "q029",
       "judge_scores": {},
       "latency_ms": {
-        "fusion": 0.186334,
-        "lexical": 16.270083,
-        "rerank": 1.91025,
-        "semantic": 1.039125
+        "fusion": 0.064291,
+        "lexical": 6.183667,
+        "rerank": 1.332292,
+        "semantic": 1.319375
       },
       "metrics": {},
       "question": "What is the exact monthly price CourseLLM pays for its embedding provider in production?",
@@ -2716,10 +2716,10 @@
       "id": "q030",
       "judge_scores": {},
       "latency_ms": {
-        "fusion": 0.186666,
-        "lexical": 19.297166,
-        "rerank": 2.08,
-        "semantic": 1.005
+        "fusion": 0.07175,
+        "lexical": 6.997,
+        "rerank": 1.342708,
+        "semantic": 1.416667
       },
       "metrics": {},
       "question": "What SHA-256 checksum does the CourseLLM build use to verify the reranker model file?",
@@ -2757,7 +2757,7 @@
           "document": "prompt-injection-in-retrieval.md",
           "lexical_rank": 8,
           "rank": 4,
-          "rerank_score": 0.406138,
+          "rerank_score": 0.407189,
           "score": 0.03057889822595705,
           "semantic_rank": 3
         },
@@ -2793,10 +2793,10 @@
       "id": "q031",
       "judge_scores": {},
       "latency_ms": {
-        "fusion": 0.185042,
-        "lexical": 23.209958,
-        "rerank": 3.00025,
-        "semantic": 0.953709
+        "fusion": 0.065042,
+        "lexical": 6.137834,
+        "rerank": 1.328292,
+        "semantic": 1.356833
       },
       "metrics": {},
       "question": "How many layers does the HNSW graph built for this evaluation corpus use?",
@@ -2870,10 +2870,10 @@
       "id": "q032",
       "judge_scores": {},
       "latency_ms": {
-        "fusion": 0.206959,
-        "lexical": 19.808958,
-        "rerank": 3.046375,
-        "semantic": 0.940625
+        "fusion": 0.065167,
+        "lexical": 6.536083,
+        "rerank": 1.32325,
+        "semantic": 1.426167
       },
       "metrics": {},
       "question": "What chunk size in tokens does CourseLLM recommend for legal contracts?",
@@ -2927,7 +2927,7 @@
       ]
     }
   ],
-  "run_id": "702ace7f786640ebb566f333f807264f",
+  "run_id": "21a3d8e60a544e2396bd0e92796a74bc",
   "schema_version": "1.0",
-  "started_at": "2026-09-24T19:42:33.581970+00:00"
+  "started_at": "2026-09-24T20:19:29.463341+00:00"
 }

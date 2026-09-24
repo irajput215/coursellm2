@@ -60,6 +60,11 @@ _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?P<scheme>[a-z][a-z0-9+.\-]*)://[^:/\s]+:(?P<pw>[^@/\s]+)@"),
 )
 
+#: Public alias for the credential patterns, so output validation
+#: (:mod:`coursellm.security.output`) can name the *kind* of a match without
+#: duplicating the patterns. This tuple is the single definition.
+SECRET_PATTERNS: tuple[re.Pattern[str], ...] = _SECRET_PATTERNS
+
 
 def _scrub_text(value: str) -> str:
     """Replace anything in ``value`` that looks like a credential."""
