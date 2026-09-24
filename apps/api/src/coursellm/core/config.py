@@ -178,6 +178,47 @@ class Settings(BaseSettings):
     graph_extraction_model: str = ""
     graph_min_edge_confidence: float = Field(default=0.55, ge=0.0, le=1.0)
     graph_max_extraction_chunks_per_document: int = Field(default=200, ge=1)
+    # Traversal bound for `search_knowledge_graph` closures. Never a `related_to`
+    # hop: a closure is prerequisite-only (knowledge-graph.md section 4).
+    graph_max_depth: int = Field(default=3, ge=1, le=10)
+    graph_min_traversable_confidence: float = Field(default=0.55, ge=0.0, le=1.0)
+    graph_statement_timeout_ms: int = Field(default=1500, ge=100, le=30_000)
+
+    # -- Agents and the LangGraph layer -------------------------------------
+    # Reasoning model for the five agent nodes. Empty means "use the task
+    # routing in coursellm.llm.routing"; set explicitly to pin a deployment.
+    agent_model: str = ""
+    agent_fallback_model: str = ""
+    # The cheap model used by `intent_router` only. Empty means the fast model.
+    agent_router_model: str = ""
+    agent_temperature: float = Field(default=0.1, ge=0.0, le=2.0)
+    # Loop and cost ceilings (agent-architecture.md section 9). Every breach
+    # exits at `answer_composer`, never with an error.
+    graph_max_steps: int = Field(default=8, ge=1, le=64)
+    agent_max_retrieval_passes: int = Field(default=2, ge=1, le=16)
+    agent_max_tool_calls_per_turn: int = Field(default=6, ge=1, le=64)
+    agent_max_tokens_per_turn: int = Field(default=24_000, ge=256)
+    agent_max_cost_usd_per_turn: float = Field(default=0.25, gt=0.0)
+    agent_turn_deadline_ms: int = Field(default=30_000, ge=100, le=600_000)
+    agent_tool_max_retries: int = Field(default=1, ge=0, le=5)
+    # `external` side effects are off by default; the web tool is additionally
+    # gated by its own flag and is unregistered unless that flag is set.
+    agent_allow_external_tools: bool = False
+    agent_web_search_enabled: bool = False
+    # Reserved for the interrupt()-based confirmation path (section 7.1). The
+    # setting exists so a deployment can declare intent; the graph currently
+    # executes additive writes directly and returns typed proposals for
+    # consequential ones.
+    agent_require_write_confirmation: bool = False
+    # `0` means "derive as 2 * GRAPH_MAX_STEPS + 8"; the validator below fills it.
+    graph_recursion_limit: int = Field(default=0, ge=0)
+    agent_max_subagent_depth: int = Field(default=1, ge=0, le=1)
+    intent_min_confidence: float = Field(default=0.55, ge=0.0, le=1.0)
+    grounding_min_evidence: int = Field(default=1, ge=1)
+    grounding_min_rerank_score: float = 0.0
+    history_window_messages: int = Field(default=20, ge=1, le=200)
+    summary_trigger_messages: int = Field(default=40, ge=1, le=1000)
+    checkpoint_backend: Literal["postgres", "none"] = "postgres"
 
     # -- Observability ------------------------------------------------------
     otel_enabled: bool = False
@@ -259,6 +300,20 @@ class Settings(BaseSettings):
 
         return self
 
+    @model_validator(mode="after")
+    def _derive_graph_recursion_limit(self) -> Settings:
+        """Fill ``GRAPH_RECURSION_LIMIT`` when it is left at its ``0`` sentinel.
+
+        The architecture document defines the default as
+        ``2 * GRAPH_MAX_STEPS + 8``. Deriving it here rather than in a computed
+        property keeps it a plain, overridable setting: a deployment that
+        deliberately raises the recursion ceiling can, and one that changes
+        ``GRAPH_MAX_STEPS`` gets a consistent ceiling for free.
+        """
+        if self.graph_recursion_limit == 0:
+            self.graph_recursion_limit = 2 * self.graph_max_steps + 8
+        return self
+
     # ------------------------------------------------------------------
     # Derived values
     # ------------------------------------------------------------------
@@ -292,6 +347,24 @@ class Settings(BaseSettings):
     def graph_model(self) -> str:
         """Model used for knowledge-graph extraction, defaulting to the fast model."""
         return self.graph_extraction_model.strip() or self.fast_model
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def resolved_agent_model(self) -> str:
+        """Model recorded for the five agent nodes, defaulting to the reasoning route.
+
+        The gateway still selects the provider model by :class:`~coursellm.llm.types.ModelTask`
+        (see :mod:`coursellm.llm.routing`); this value is what the agent layer
+        records in ``evaluation_metadata.models`` so a turn is attributable to a
+        model revision.
+        """
+        return self.agent_model.strip() or self.reasoning_model
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def resolved_agent_router_model(self) -> str:
+        """Model recorded for ``intent_router``, defaulting to the fast model."""
+        return self.agent_router_model.strip() or self.fast_model
 
     @property
     def retrieval_config_version(self) -> str:

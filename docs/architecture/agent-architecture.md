@@ -1176,3 +1176,54 @@ Prompt and model versions are recorded, not just configured: each node writes it
 `prompt_version` and model id into `agent_decisions` and `evaluation_metadata`, so a
 behaviour change is attributable to a prompt revision, a model revision, or a retrieval
 config revision (`RETRIEVAL_CONFIG_VERSION`, `rag.md` §10).
+
+---
+
+## 14. Deviations from this specification, and known gaps
+
+This document is the design. The implementation was written against it, and where the
+two differ the difference is recorded here rather than left for a reader to discover —
+a specification that quietly disagrees with the code is worse than no specification,
+because it makes every other claim in it unreliable.
+
+### 14.1 Deliberate deviations
+
+| # | This document says | The code does | Why |
+|---|--------------------|---------------|-----|
+| 1 | Checkpoints are namespaced by `configurable.checkpoint_ns = tenant_id` | The thread id is `f"{tenant_id}:{conversation_id}"` | LangGraph 1.2.12 ignores `checkpoint_ns` for top-level checkpoints — verified by writing with a namespace and reading back `""`. The composed thread id gives the same isolation guarantee and does not depend on library behaviour that is not honoured. |
+| 2 | Agent role prompts live in `prompts/` | They are module constants in `agents/nodes/agents.py`; the composer still uses the versioned `prompts/tutor/*.md` files | `tests/unit/test_prompt_loader.py` asserts that the set of placeholders documented in `prompts/README.md` is exactly the set used on disk. Adding agent prompts with different placeholders would fail that guard, and prompt files sat outside that PR's scope. Moving them is worthwhile and is tracked below. |
+| 3 | `Permission` has the members listed in §7.1; `DegradationReason` has the members listed in §2 | `GRAPH_WRITE` was added to `Permission`, and `PROGRESS_UNAVAILABLE`, `SAFETY_GUARDRAIL_ERROR`, `EXTERNAL_SOURCES_UNAVAILABLE`, `TOOL_UNAVAILABLE` and `TOOL_ERROR` were added to `DegradationReason` | The failure tables elsewhere in this document already named several of these reasons without declaring them. An enum that omits the values the code needs is a documentation bug; the enum is the fix. |
+| 4 | `retrieved_documents` accumulates across retrieval passes | It does, via `operator.add`; `rerank` therefore emits scored copies and the composer de-duplicates by `chunk_id`, keeping the scored entry | The reducer is append-only by design so a second pass accumulates rather than discarding the first. Carrying the rerank score onto the accumulated entry without a mutable channel is the straightforward consequence. |
+| 5 | Non-tutor intents are phrased by `answer_composer` | Tutor turns go through the model; planner, recommender, assessment and progress turns are phrased deterministically from their typed artifacts | The artifacts are already structured and validated. Asking a model to restate validated JSON adds latency, cost and a hallucination surface for no information gain. |
+
+### 14.2 Known gaps
+
+These are things this document specifies that the code does **not** yet do. Each is a
+deliberate deferral with a named owner PR, not an oversight.
+
+| Gap | Impact | Where it is closed |
+|-----|--------|--------------------|
+| `AGENT_MODEL`, `AGENT_FALLBACK_MODEL` and `AGENT_ROUTER_MODEL` are read and recorded in `evaluation_metadata`, but the gateway still selects the provider model from `ModelTask` alone | A per-role model override is recorded but has no effect on routing. The knob currently documents intent without changing behaviour, which is the one thing a configuration option must not do. | Wire an explicit override through `LLMRequest` in a hardening pass, or delete the settings so `ModelTask` is the single mechanism. Recorded in PR 23. |
+| `messages` lacks the `intent`, `model`, `prompt_version`, `latency_ms` and `trace_id` columns described in §10.1 | Persistence writes the columns that exist — tenant, conversation, role, content, citations, degraded, grounded, token_count and `retrieval_config_version`. A turn cannot be filtered by intent or joined to `llm_usage` by `trace_id` at the SQL level. | A migration in PR 15, which introduces the trace identifiers the column would hold. |
+| `AGENT_REQUIRE_WRITE_CONFIRMATION`, the `interrupt()` wrapper and the `ProposedAction` flow in §7.1 are not wired | Consequential-write confirmation is specified but absent. It is not currently exploitable, because every write tool is a typed stub that performs no write. | The write tools are implemented in PR 11 (`update_learning_plan`) and PR 13 (`create_quiz`, `evaluate_answer`); the confirmation wrapper must land with the first of them, not after. |
+| `search_course` returns the course and its ready documents, without the module/lecture/topic nodes §7.2 describes | Course structure is coarser than specified, so a "which lecture covers this?" question is answered from documents rather than from structure. | Needs a schema for course structure; tracked for PR 11, which already models ordered roadmap steps. |
+| `search_web_sources` performs no outbound HTTP | The tool is registered only when `AGENT_WEB_SEARCH_ENABLED` is set and returns a typed empty result with `degraded=["external_sources_unavailable"]` | PR 12, which also owns the domain allowlist that makes outbound fetching safe. |
+
+### 14.3 Typed stubs
+
+Six tools are registered with their real schemas, permission requirements and audit
+behaviour, but return typed empty results with a named degradation reason instead of
+data. They are honest stubs rather than fabricated answers, which matters because a tool
+that invents a recommendation is worse than one that says it has none.
+
+| Tool | Returns until implemented | Owner |
+|------|---------------------------|-------|
+| `search_knowledge_graph` | `[]` with `knowledge_graph_empty` | PR 10 |
+| `update_learning_plan` | typed empty roadmap with `tool_unavailable` | PR 11 |
+| `get_recommendations` | `[]` with `tool_unavailable` | PR 12 |
+| `search_web_sources` | `[]` with `external_sources_unavailable` | PR 12 |
+| `create_quiz`, `evaluate_answer` | typed empty results with `tool_unavailable` | PR 13 |
+
+`search_documents`, `search_books`, `search_course` and `get_student_progress` are wired
+to real logic: the first two run the full `rerank(rrf(hybrid_search(…)))` pipeline on the
+tenant-scoped session.
