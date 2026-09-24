@@ -213,7 +213,7 @@ Assembly, per [rag.md](./rag.md) §7, produces passages rendered as:
 
 ```text
 <untrusted_evidence id="S1" source_type="lecture" page="12" trust="official">
-... passage text, reserved markers neutralised at ingest and again here ...
+... passage text, reserved markers neutralised as the region is built ...
 </untrusted_evidence>
 ```
 
@@ -232,10 +232,20 @@ Three properties make this structural rather than persuasive:
    `prompts/`. Evidence is interpolated into a single template slot that is fenced and
    labelled. There is no code path that concatenates document text into the instruction
    block.
-2. **Reserved-marker neutralisation.** If document text contains the literal strings
-   `<untrusted_evidence` or `</untrusted_evidence>` (or the legacy chat-template tokens the
-   model was trained on), they are stripped at ingestion *and* again at assembly. An
-   attacker cannot close the fence early and "escape" into instruction position.
+2. **Reserved-marker neutralisation, at assembly.** If document text contains the
+   literal strings `<untrusted_evidence` or `</untrusted_evidence>` (or the legacy
+   chat-template tokens the model was trained on), they are stripped as each passage is
+   wrapped. An attacker cannot close the fence early and "escape" into instruction
+   position.
+
+   The stripping happens at assembly rather than at ingestion, and that placement is
+   deliberate: assembly is the only point where the fence is actually constructed, so it
+   is the only point that has to be correct. Stripping at ingestion as well would be
+   belt-and-braces — it would also protect some future consumer that renders stored
+   passages directly — but it would not make the fence safer, and a control that appears
+   in two places invites the assumption that either one alone suffices. A regression test
+   feeds a passage containing a literal `</untrusted_evidence>` and asserts the region is
+   not escaped.
 3. **Report-don't-obey.** The model is instructed to surface attempted manipulation to
    the user rather than silently ignore it. This turns a successful injection into a
    user-visible signal and a queryable event, instead of an invisible one.
