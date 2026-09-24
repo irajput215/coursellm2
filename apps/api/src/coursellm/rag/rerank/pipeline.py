@@ -32,6 +32,22 @@ import uuid
 from dataclasses import dataclass, replace
 
 from coursellm.core.config import Settings
+from coursellm.observability import metrics, tracing
+from coursellm.observability.attributes import (
+    COURSELLM_CONFIG_VERSION,
+    RETRIEVAL_CANDIDATES_IN,
+    RETRIEVAL_CANDIDATES_OUT,
+    RETRIEVAL_DEGRADED,
+    RETRIEVAL_DURATION_MS,
+    RETRIEVAL_FUSED,
+    RETRIEVAL_RERANK_TOP_K,
+    RETRIEVAL_RRF_K,
+    RETRIEVAL_STAGE,
+    RETRIEVAL_TOP_K_PER_RETRIEVER,
+    SPAN_RETRIEVAL,
+    SPAN_RETRIEVAL_FUSION,
+    SPAN_RETRIEVAL_RERANK,
+)
 from coursellm.rag.fusion.rrf import FusedResult, fuse
 from coursellm.rag.rerank.rerankers import RerankedResult, Reranker, get_reranker
 from coursellm.rag.retrieval.types import RetrievalOutcome, SearchResult
@@ -78,6 +94,34 @@ async def rank(
     settings: Settings,
     reranker: Reranker | None = None,
 ) -> RankingOutcome:
+    """Fuse and rerank under a ``retrieval`` parent span.
+
+    The retrieval phase is two calls in this architecture — ``hybrid_search``
+    returns the two ranked lists and ``rank`` consumes them — so each is wrapped
+    in a ``retrieval`` span. The fusion and rerank stages hang off this one,
+    matching the documented parent/child shape.
+    """
+    with tracing.span(
+        SPAN_RETRIEVAL,
+        **{
+            RETRIEVAL_TOP_K_PER_RETRIEVER: settings.retrieval_top_k_per_retriever,
+            RETRIEVAL_RERANK_TOP_K: settings.rerank_top_k,
+            COURSELLM_CONFIG_VERSION: settings.retrieval_config_version,
+        },
+    ):
+        return await _rank(
+            query=query, semantic=semantic, lexical=lexical, settings=settings, reranker=reranker
+        )
+
+
+async def _rank(
+    *,
+    query: str,
+    semantic: RetrievalOutcome,
+    lexical: RetrievalOutcome,
+    settings: Settings,
+    reranker: Reranker | None = None,
+) -> RankingOutcome:
     """Fuse, rerank and truncate two retriever outcomes into a ranking.
 
     ``reranker`` is injectable so tests can supply a deterministic double
@@ -87,14 +131,40 @@ async def rank(
     """
     degraded: list[str] = []
 
+    candidates_in = len(semantic.results) + len(lexical.results)
     fusion_started = time.perf_counter()
-    fused = fuse(
-        semantic=semantic,
-        lexical=lexical,
-        k=settings.rrf_k,
-        top_n=settings.retrieval_top_k_per_retriever,
+    with tracing.span(
+        SPAN_RETRIEVAL_FUSION,
+        **{
+            RETRIEVAL_STAGE: "fusion",
+            RETRIEVAL_RRF_K: settings.rrf_k,
+            RETRIEVAL_CANDIDATES_IN: candidates_in,
+            COURSELLM_CONFIG_VERSION: settings.retrieval_config_version,
+        },
+    ) as record:
+        fused = fuse(
+            semantic=semantic,
+            lexical=lexical,
+            k=settings.rrf_k,
+            top_n=settings.retrieval_top_k_per_retriever,
+        )
+        fusion_ms = (time.perf_counter() - fusion_started) * 1000.0
+        record.set_attributes(
+            {
+                RETRIEVAL_FUSED: len(fused.results),
+                RETRIEVAL_CANDIDATES_OUT: len(fused.results),
+                RETRIEVAL_DURATION_MS: fusion_ms,
+                RETRIEVAL_DEGRADED: bool(fused.degraded),
+            }
+        )
+    metrics.record_retrieval_stage(
+        stage="fusion",
+        duration_ms=fusion_ms,
+        candidates=len(fused.results),
+        retriever="fusion",
+        degraded=bool(fused.degraded),
     )
-    fusion_ms = (time.perf_counter() - fusion_started) * 1000.0
+    metrics.record_degraded(*fused.degraded)
     degraded.extend(fused.degraded)
 
     candidates = fused.results
@@ -104,29 +174,56 @@ async def rank(
 
     if settings.rerank_enabled:
         active = reranker if reranker is not None else get_reranker(settings)
+        model_id = str(getattr(active, "model_id", "unknown"))
         rerank_started = time.perf_counter()
-        try:
-            reranked = await asyncio.wait_for(
-                active.rerank(
-                    query,
-                    [candidate.source for candidate in candidates],
-                    top_k=len(candidates),
-                ),
-                timeout=settings.rerank_timeout_ms / 1000.0,
-            )
-        except TimeoutError:
-            degraded.append(RERANK_TIMEOUT)
-        except Exception:
-            degraded.append(RERANKER_UNAVAILABLE)
-        else:
-            if not reranked and candidates:
-                # A reranker that returns nothing has failed, even if it did not
-                # raise; falling back to RRF is safer than returning no context.
-                degraded.append(RERANKER_UNAVAILABLE)
+        timed_out = False
+        rerank_degraded: list[str] = []
+        with tracing.span(
+            SPAN_RETRIEVAL_RERANK,
+            **{
+                RETRIEVAL_STAGE: "rerank",
+                RETRIEVAL_RERANK_TOP_K: settings.rerank_top_k,
+                RETRIEVAL_CANDIDATES_IN: len(candidates),
+            },
+        ) as record:
+            try:
+                reranked = await asyncio.wait_for(
+                    active.rerank(
+                        query,
+                        [candidate.source for candidate in candidates],
+                        top_k=len(candidates),
+                    ),
+                    timeout=settings.rerank_timeout_ms / 1000.0,
+                )
+            except TimeoutError:
+                timed_out = True
+                rerank_degraded.append(RERANK_TIMEOUT)
+            except Exception:
+                rerank_degraded.append(RERANKER_UNAVAILABLE)
             else:
-                reranked_ids, rerank_scores = _reranked_order(candidates, reranked)
-        finally:
-            rerank_ms = (time.perf_counter() - rerank_started) * 1000.0
+                if not reranked and candidates:
+                    # A reranker that returns nothing has failed, even if it did not
+                    # raise; falling back to RRF is safer than returning no context.
+                    rerank_degraded.append(RERANKER_UNAVAILABLE)
+                else:
+                    reranked_ids, rerank_scores = _reranked_order(candidates, reranked)
+            finally:
+                rerank_ms = (time.perf_counter() - rerank_started) * 1000.0
+                record.set_attributes(
+                    {
+                        RETRIEVAL_CANDIDATES_OUT: len(rerank_scores),
+                        RETRIEVAL_DURATION_MS: rerank_ms,
+                        RETRIEVAL_DEGRADED: bool(rerank_degraded),
+                    }
+                )
+        degraded.extend(rerank_degraded)
+        metrics.record_rerank(
+            model=model_id,
+            duration_ms=rerank_ms,
+            timed_out=timed_out,
+            scores=rerank_scores.values(),
+        )
+        metrics.record_degraded(*rerank_degraded)
 
     if reranked_ids is not None:
         ordered_ids = _apply_floor(reranked_ids, rerank_scores, settings, degraded)

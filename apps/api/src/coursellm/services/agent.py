@@ -47,6 +47,16 @@ from coursellm.db.tenancy import TenantContext
 from coursellm.llm import LLMGateway, ModelTask, resolve_model
 from coursellm.llm.cost import count_tokens
 from coursellm.llm.types import LLMScope, bind_llm_scope
+from coursellm.observability import metrics, tracing
+from coursellm.observability.attributes import (
+    GRAPH_DEGRADED,
+    GRAPH_INTENT,
+    GRAPH_NAME,
+    GRAPH_OUTCOME,
+    GRAPH_STEPS,
+    GRAPH_TOOL_CALLS,
+    SPAN_AGENT_GRAPH,
+)
 from coursellm.services.chat import unique, validate_question
 
 logger = get_logger(__name__)
@@ -88,6 +98,7 @@ async def run_turn(
     progress_provider: ProgressProvider | None = None,
 ) -> AgentTurnResult:
     """Run one bounded agent turn and persist it."""
+    started_ns = time.monotonic_ns()
     validate_question(settings, question)
     conversation = await _resolve_conversation(
         session,
@@ -152,6 +163,13 @@ async def run_turn(
     token_usage = final.get("token_usage") or TokenUsage(
         prompt_tokens=0, completion_tokens=0, total_tokens=0, cost_usd=0.0, calls=0
     )
+    intent = str(final.get("intent", "tutor"))
+    raw_metadata = final.get("evaluation_metadata")
+    evaluation_metadata: dict[str, Any] = (
+        dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
+    )
+    recorded_models = evaluation_metadata.get("models") or {}
+    recorded_prompts = evaluation_metadata.get("prompt_versions") or {}
     assistant_message = Message(
         tenant_id=context.tenant_id,
         conversation_id=conversation.id,
@@ -166,6 +184,14 @@ async def run_turn(
             else count_tokens(answer, model)
         ),
         retrieval_config_version=settings.retrieval_config_version,
+        # Observability columns, taken from ``evaluation_metadata`` and the
+        # active span so a stored answer is attributable to the model, prompt
+        # version and trace that produced it.
+        intent=intent,
+        model=str(recorded_models.get(intent) or model),
+        prompt_version=recorded_prompts.get(intent),
+        latency_ms=int((time.monotonic_ns() - started_ns) / 1_000_000),
+        trace_id=tracing.current_trace_id(),
     )
     session.add(assistant_message)
     await session.flush()
@@ -175,7 +201,7 @@ async def run_turn(
         citations=citations,
         grounded=bool(grounding.get("grounded", False)),
         degraded=degraded,
-        intent=str(final.get("intent", "tutor")),
+        intent=intent,
         conversation_id=conversation.id,
         token_usage=token_usage,
         roadmap=final.get("roadmap"),
@@ -198,14 +224,52 @@ async def _invoke(
     initial: ConversationState,
     config: RunnableConfig,
 ) -> ConversationState:
-    """Invoke the graph, converting a recursion-limit breach into degradation."""
-    with bind_llm_scope(_scope_for(initial)):
+    """Invoke the graph, converting a recursion-limit breach into degradation.
+
+    The whole run is one ``agent_graph`` span that covers every node span, so
+    duration is inclusive and a regression is attributable to a node.
+    """
+    metrics.get_registry().increment("coursellm.graph.runs.active", 1.0)
+    with tracing.span(SPAN_AGENT_GRAPH, **{GRAPH_NAME: "tutor_graph"}) as record:
+        final: ConversationState = initial
         try:
-            result = await graph.ainvoke(initial, config)
-        except GraphRecursionError:
-            logger.warning("agent_graph_recursion_limit", request_id=str(initial["request_id"]))
-            return await _partial(graph, config, initial)
-    return cast(ConversationState, result)
+            with bind_llm_scope(_scope_for(initial)):
+                try:
+                    result = await graph.ainvoke(initial, config)
+                except GraphRecursionError:
+                    logger.warning(
+                        "agent_graph_recursion_limit", request_id=str(initial["request_id"])
+                    )
+                    final = await _partial(graph, config, initial)
+                else:
+                    final = cast(ConversationState, result)
+        finally:
+            metrics.get_registry().increment("coursellm.graph.runs.active", -1.0)
+        _record_graph_outcome(record, final)
+        return final
+
+
+def _record_graph_outcome(record: tracing.SpanRecorder, state: ConversationState) -> None:
+    """Attach the run's terminal attributes and record its metric."""
+    intent = str(state.get("intent", "tutor"))
+    degraded = [getattr(reason, "value", str(reason)) for reason in state.get("degraded") or []]
+    grounded = bool((state.get("grounding") or {}).get("grounded"))
+    outcome = "answered" if grounded else ("partial" if degraded else "refused")
+    record.set_attributes(
+        {
+            GRAPH_INTENT: intent,
+            GRAPH_STEPS: int(state.get("iteration_count", 0) or 0),
+            GRAPH_TOOL_CALLS: len(state.get("tool_calls") or []),
+            GRAPH_DEGRADED: degraded,
+            GRAPH_OUTCOME: outcome,
+        }
+    )
+    metrics.record_graph_run(
+        intent=intent,
+        steps=int(state.get("iteration_count", 0) or 0),
+        outcome=outcome,
+    )
+    metrics.record_degraded(*degraded)
 
 
 def _scope_for(state: ConversationState) -> LLMScope:

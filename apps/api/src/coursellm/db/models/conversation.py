@@ -127,6 +127,17 @@ class Message(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
     # pipeline changed.
     retrieval_config_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
+    # --- Observability columns (docs/architecture/observability.md section 10.1) ---
+    # Nullable because every row written before this revision predates them, and
+    # because a non-agent chat turn has no routed intent to record. They join a
+    # stored answer to the trace that produced it and make a latency regression
+    # answerable from the transcript alone.
+    intent: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    prompt_version: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    trace_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+
     conversation: Mapped[Conversation] = relationship(back_populates="messages", lazy="raise")
 
     def __repr__(self) -> str:

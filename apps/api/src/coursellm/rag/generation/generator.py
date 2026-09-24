@@ -22,6 +22,16 @@ from coursellm.core.config import Settings
 from coursellm.core.errors import ServiceUnavailableError, UpstreamError
 from coursellm.core.logging import get_logger
 from coursellm.llm import ChatMessage, LLMGateway, LLMRequest, LLMResponse, ModelTask
+from coursellm.observability import metrics, tracing
+from coursellm.observability.attributes import (
+    COURSELLM_CONFIG_VERSION,
+    COURSELLM_LLM_PROMPT_VERSION,
+    GEN_AI_RESPONSE_MODEL,
+    GEN_AI_USAGE_INPUT_TOKENS,
+    GEN_AI_USAGE_OUTPUT_TOKENS,
+    SPAN_GENERATION,
+    SPAN_OUTPUT_VALIDATION,
+)
 from coursellm.prompts.loader import PromptLibrary
 from coursellm.rag.generation.citations import (
     extract_citation_ids,
@@ -99,15 +109,30 @@ class AnswerGenerator:
 
         template = self._prompts.get(_ANSWER_TEMPLATE)
         request = self._request(question, context, course_name=course_name, history=history)
-        try:
-            response = await self._gateway.complete(request)
-        except (ServiceUnavailableError, UpstreamError) as exc:
-            logger.warning(
-                "tutor_generation_degraded",
-                reason=LLM_UNAVAILABLE,
-                exc_type=type(exc).__name__,
+        with tracing.span(
+            SPAN_GENERATION,
+            **{
+                COURSELLM_LLM_PROMPT_VERSION: template.template_id,
+                COURSELLM_CONFIG_VERSION: self._settings.retrieval_config_version,
+            },
+        ) as record:
+            try:
+                response = await self._gateway.complete(request)
+            except (ServiceUnavailableError, UpstreamError) as exc:
+                logger.warning(
+                    "tutor_generation_degraded",
+                    reason=LLM_UNAVAILABLE,
+                    exc_type=type(exc).__name__,
+                )
+                record.set_error()
+                return self._extractive(question, context, course_name=course_name)
+            record.set_attributes(
+                {
+                    GEN_AI_RESPONSE_MODEL: response.model,
+                    GEN_AI_USAGE_INPUT_TOKENS: response.prompt_tokens,
+                    GEN_AI_USAGE_OUTPUT_TOKENS: response.completion_tokens,
+                }
             )
-            return self._extractive(question, context, course_name=course_name)
         return self._finalise(
             response.text,
             context,
@@ -208,6 +233,7 @@ class AnswerGenerator:
             course_name=course_name,
             question=question,
         )
+        metrics.record_degraded(NO_EVIDENCE)
         return GeneratedAnswer(
             text=text,
             citations=[],
@@ -228,6 +254,7 @@ class AnswerGenerator:
         available = {citation.citation_id for citation in context.citations}
         cleaned, _removed = strip_hallucinated(text, available)
         citations = _citations_for(cleaned, context)
+        metrics.record_degraded(LLM_UNAVAILABLE)
         return GeneratedAnswer(
             text=cleaned,
             citations=citations,
@@ -249,24 +276,27 @@ class AnswerGenerator:
         extra_degraded: Sequence[str],
     ) -> GeneratedAnswer:
         available = {citation.citation_id for citation in context.citations}
-        cleaned, _removed = strip_hallucinated(text, available)
-        report = verify_citations(cleaned, available)
-        degraded = list(extra_degraded)
-        if not report.valid and not is_refusal(cleaned):
-            # An answer with no resolvable citation is not grounded. It is still
-            # returned (it may be a useful refusal in the model's own words), but
-            # the degradation is visible to the caller and logged for review.
-            degraded.append(UNCITED_ANSWER)
-            logger.warning("tutor_answer_uncited", prompt_template_id=prompt_template_id)
-        return GeneratedAnswer(
-            text=cleaned,
-            citations=_citations_for(cleaned, context),
-            grounded=bool(report.valid),
-            degraded=_unique(degraded),
-            usage=usage,
-            model=model,
-            prompt_template_id=prompt_template_id,
-        )
+        with tracing.span(SPAN_OUTPUT_VALIDATION) as _record:
+            cleaned, _removed = strip_hallucinated(text, available)
+            report = verify_citations(cleaned, available)
+            degraded = list(extra_degraded)
+            if not report.valid and not is_refusal(cleaned):
+                # An answer with no resolvable citation is not grounded. It is still
+                # returned (it may be a useful refusal in the model's own words), but
+                # the degradation is visible to the caller and logged for review.
+                degraded.append(UNCITED_ANSWER)
+                logger.warning("tutor_answer_uncited", prompt_template_id=prompt_template_id)
+            answer = GeneratedAnswer(
+                text=cleaned,
+                citations=_citations_for(cleaned, context),
+                grounded=bool(report.valid),
+                degraded=_unique(degraded),
+                usage=usage,
+                model=model,
+                prompt_template_id=prompt_template_id,
+            )
+        metrics.record_degraded(*answer.degraded)
+        return answer
 
 
 def compose_extractive(
