@@ -65,6 +65,13 @@ FORBIDDEN_PERMISSIONS: frozenset[Permission] = frozenset(
     }
 )
 
+#: The review-queue capability. First-class in the :class:`Permission` enum but
+#: deliberately absent from :data:`PERMISSION_MATRIX`: the review UI holds it, and
+#: granting it to an agent would let a model-chosen argument widen traversal to
+#: unverified edges. It is *not* in :data:`FORBIDDEN_PERMISSIONS` — it is a
+#: legitimate human capability, not a prohibited one.
+GRAPH_REVIEW_PERMISSION: Permission = Permission.GRAPH_REVIEW
+
 
 def _rows() -> tuple[tuple[str, str, bool], ...]:
     """The 5 x 13 matrix as ``(agent, tool, allowed)`` triples."""
@@ -180,6 +187,7 @@ __all__ = [
     "AGENT_TOOLS",
     "DENIED_CAPABILITIES",
     "FORBIDDEN_PERMISSIONS",
+    "GRAPH_REVIEW_PERMISSION",
     "PERMISSION_MATRIX",
     "REGISTERED_TOOL_NAMES",
     "RETRIEVAL_TOOL_NAMES",

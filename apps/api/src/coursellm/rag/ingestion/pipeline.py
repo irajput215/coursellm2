@@ -55,6 +55,7 @@ from coursellm.db.models.content import (
     ChunkTerm,
     Document,
     DocumentStatus,
+    QuarantineState,
     TenantCorpusStats,
     TenantLexicalStats,
 )
@@ -63,6 +64,8 @@ from coursellm.rag.analyzers import term_frequencies, tokenize_for_index
 from coursellm.rag.ingestion.chunker import ChunkingConfig, chunk_pages, chunking_config_version
 from coursellm.rag.ingestion.embedders import Embedder, get_embedder
 from coursellm.rag.ingestion.parsers import parse_document
+from coursellm.security.injection import classify
+from coursellm.security.sanitize import scrub_for_storage
 
 logger = get_logger(__name__)
 
@@ -91,6 +94,7 @@ async def ingest_document(
     document: Document,
     data: bytes,
     embedder: Embedder | None = None,
+    quarantine_enabled: bool = True,
 ) -> IngestionResult:
     """Parse, chunk, embed and index ``data`` as ``document``.
 
@@ -99,6 +103,14 @@ async def ingest_document(
     apply to every statement this function issues even if the caller's session
     was scoped differently. Re-ingesting the same document is safe and replaces
     its chunks rather than adding to them.
+
+    ``quarantine_enabled`` is the trusted-corpus switch. A user upload always
+    quarantines (the default). A curated, version-controlled corpus — the
+    evaluation corpus is the only caller that passes ``False`` — records the
+    detector score and classes on the document but never withholds its chunks,
+    because reference material *about* prompt injection legitimately contains
+    attack examples and a blunt quarantine would remove the very evidence the
+    corpus exists to provide.
     """
     resolved_embedder = embedder if embedder is not None else get_embedder(settings)
     tenant_id = document.tenant_id
@@ -124,11 +136,56 @@ async def ingest_document(
                 "The document produced no chunks (it may contain no extractable text)."
             )
 
+        # Neutralise reserved markers at ingest as belt-and-braces: assembly is
+        # the only place the fence is built and therefore the only place that has
+        # to strip, but a future consumer that renders stored passages directly
+        # is protected by doing it here too.
+        contents = [scrub_for_storage(draft.content) for draft in drafts]
+        verdicts = [classify(content, settings=settings) for content in contents]
+        max_score = max((verdict.score for verdict in verdicts), default=0.0)
+        classes = sorted({name for verdict in verdicts for name in verdict.classes})
+        quarantine = _quarantine_state(max_score, settings)
+        if not quarantine_enabled and quarantine is QuarantineState.QUARANTINED:
+            # A trusted corpus records the signal but stays retrievable.
+            quarantine = QuarantineState.FLAGGED
+        document.injection_score = max_score
+        document.injection_classes = classes
+        document.quarantine_state = quarantine
+        await session.flush()
+
+        if quarantine is QuarantineState.QUARANTINED:
+            # Quarantined content is excluded from retrieval entirely: no chunk
+            # is written, so no retriever can return it even by a code path that
+            # forgets the predicate. The document row remains so a reviewer can
+            # inspect and clear it; clearing re-ingests through this same path.
+            stale_terms = await _terms_for_document(session, document.id, tenant_id)
+            await _delete_existing_chunks(session, document_id=document.id, tenant_id=tenant_id)
+            await _recompute_lexical_stats(session, tenant_id=tenant_id, terms=stale_terms)
+            await _recompute_corpus_stats(session, tenant_id=tenant_id)
+            document.status = DocumentStatus.READY
+            document.page_count = parsed.page_count
+            document.chunking_config_version = chunking_config_version(config)
+            await session.flush()
+            logger.warning(
+                "document_quarantined",
+                document_id=str(document.id),
+                tenant_id=str(tenant_id),
+                injection_score=max_score,
+                injection_classes=classes,
+            )
+            return IngestionResult(
+                document_id=document.id,
+                chunk_count=0,
+                token_count=sum(draft.token_count for draft in drafts),
+                page_count=parsed.page_count,
+                embedding_model=resolved_embedder.model_id,
+                chunking_config_version=chunking_config_version(config),
+                warnings=(*parsed.warnings, "document_quarantined"),
+            )
+
         document.status = DocumentStatus.EMBEDDING
         await session.flush()
-        vectors = await _embed_in_batches(
-            resolved_embedder, [draft.content for draft in drafts], settings
-        )
+        vectors = await _embed_in_batches(resolved_embedder, contents, settings)
         _validate_vectors(vectors, settings, resolved_embedder.model_id)
 
         # Collect the terms the old chunks contributed *before* deleting them;
@@ -144,13 +201,13 @@ async def ingest_document(
                 tenant_id=tenant_id,
                 document_id=document.id,
                 course_id=document.course_id,
-                content=draft.content,
+                content=content,
                 page=draft.page,
                 chunk_index=draft.chunk_index,
                 token_count=draft.token_count,
                 starts_mid_sentence=draft.starts_mid_sentence,
             )
-            for draft in drafts
+            for draft, content in zip(drafts, contents, strict=True)
         ]
         session.add_all(chunks)
         await session.flush()  # assign chunk ids for the child rows
@@ -168,8 +225,8 @@ async def ingest_document(
             ]
         )
 
-        for chunk, draft in zip(chunks, drafts, strict=True):
-            frequencies = term_frequencies(tokenize_for_index(draft.content))
+        for chunk, content in zip(chunks, contents, strict=True):
+            frequencies = term_frequencies(tokenize_for_index(content))
             affected_terms.update(frequencies)
             session.add_all(
                 [
@@ -229,6 +286,7 @@ async def reingest(
     document: Document,
     data: bytes,
     embedder: Embedder | None = None,
+    quarantine_enabled: bool = True,
 ) -> IngestionResult:
     """Re-index a document, replacing its existing chunks.
 
@@ -238,12 +296,32 @@ async def reingest(
     point because "re-ingest this document" is a distinct operation for callers
     and logs, not because it does anything different.
     """
-    return await ingest_document(session, settings, document=document, data=data, embedder=embedder)
+    return await ingest_document(
+        session,
+        settings,
+        document=document,
+        data=data,
+        embedder=embedder,
+        quarantine_enabled=quarantine_enabled,
+    )
 
 
 # ---------------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------------
+def _quarantine_state(score: float, settings: Settings) -> QuarantineState:
+    """Map a document's maximum detector score to a review state.
+
+    The thresholds are inclusive, exactly as for a query verdict: a document at
+    the block threshold is quarantined, and one at the warn threshold is flagged.
+    """
+    if score >= settings.injection_block_threshold:
+        return QuarantineState.QUARANTINED
+    if score >= settings.injection_warn_threshold:
+        return QuarantineState.FLAGGED
+    return QuarantineState.CLEAN
+
+
 async def _embed_in_batches(
     embedder: Embedder, texts: list[str], settings: Settings
 ) -> list[list[float]]:

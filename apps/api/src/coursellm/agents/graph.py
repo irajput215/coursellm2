@@ -165,6 +165,7 @@ def build_graph(
     metadata_provider: MetadataProvider | None = None,
     course_name_provider: CourseNameProvider | None = None,
     scope_check: ScopeCheck | None = None,
+    require_write_confirmation: bool | None = None,
 ) -> CompiledStateGraph[ConversationState, None, ConversationState, ConversationState]:
     """Build and compile the graph.
 
@@ -172,9 +173,22 @@ def build_graph(
     every tool handler inherits its tenancy. When it is absent the graph still
     compiles and runs — retrieval returns empty evidence and the composer refuses
     — which is what lets the routing and node unit tests run with no database.
+
+    ``require_write_confirmation`` overrides
+    ``settings.agent_require_write_confirmation`` for this graph. When it is true
+    every ``write`` tool is withheld and returned as a signed
+    :class:`~coursellm.tools.registry.ProposedAction`; a consequential write is
+    withheld regardless, because the model must never hold an execution
+    capability for an irreversible action (``security.md`` section 5).
     """
     active_registry = registry or build_tool_registry(settings, graph_repository=graph_repository)
-    executor = ToolExecutor(active_registry, settings=settings, session=session, gateway=gateway)
+    executor = ToolExecutor(
+        active_registry,
+        settings=settings,
+        session=session,
+        gateway=gateway,
+        require_write_confirmation=require_write_confirmation,
+    )
     active_prompts = prompts or PromptLibrary(settings)
     metadata = metadata_provider or _document_metadata_provider(session)
     course_name = course_name_provider or _course_name_provider(session)

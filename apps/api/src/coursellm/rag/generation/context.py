@@ -27,6 +27,7 @@ from pydantic import BaseModel, ConfigDict
 from coursellm.core.config import Settings
 from coursellm.db.models.content import SourceType
 from coursellm.rag.rerank.pipeline import RankedPassage
+from coursellm.security.sanitize import neutralise_markers
 
 #: The opening delimiter of the untrusted region. The rendered form adds the
 #: ``id``, ``source``, optional ``page`` and ``source_type`` attributes.
@@ -34,10 +35,6 @@ EVIDENCE_OPEN_TAG = "<untrusted_evidence"
 #: The closing delimiter of the untrusted region.
 EVIDENCE_CLOSE_TAG = "</untrusted_evidence>"
 
-# A complete reserved tag, including any attributes, and the bare prefix that can
-# remain if the attacker omitted the closing angle bracket.
-_RESERVED_TAG_RE = re.compile(r"</?untrusted_evidence[^>]*>", re.IGNORECASE)
-_RESERVED_PREFIX_RE = re.compile(r"</?untrusted_evidence", re.IGNORECASE)
 _SENTENCE_RE = re.compile(r"(?<=[.!?])\s+")
 
 # One document may not take the whole context. The cap is applied both when
@@ -390,8 +387,13 @@ def _render_block(citation_id: str, meta: DocumentMeta, page: int | None, conten
 
 
 def _neutralise(content: str) -> str:
-    """Remove reserved markers so document text cannot close the region early."""
-    return _RESERVED_PREFIX_RE.sub("", _RESERVED_TAG_RE.sub("", content))
+    """Remove reserved markers so document text cannot close the region early.
+
+    Delegates to :func:`coursellm.security.sanitize.neutralise_markers` so that
+    assembly and ingestion share one implementation and cannot drift on what a
+    reserved marker is.
+    """
+    return neutralise_markers(content)
 
 
 def _attribute(value: str) -> str:

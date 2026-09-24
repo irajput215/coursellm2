@@ -29,7 +29,7 @@ from __future__ import annotations
 import time
 import uuid
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Literal
 
@@ -48,7 +48,7 @@ from coursellm.agents.state import (
     empty_progress,
 )
 from coursellm.core.config import Settings
-from coursellm.core.errors import NotFoundError, ValidationError
+from coursellm.core.errors import NotFoundError, SafetyError, ValidationError
 from coursellm.core.logging import get_logger
 from coursellm.db.models.content import Chunk, SourceType
 from coursellm.db.models.conversation import Conversation, Message, MessageRole
@@ -71,6 +71,10 @@ from coursellm.rag.rerank.pipeline import RankingOutcome, rank
 from coursellm.rag.retrieval.hybrid import hybrid_search
 from coursellm.rag.retrieval.types import RetrievalFilters
 from coursellm.repositories.content import CourseRepository, DocumentRepository
+from coursellm.security.injection import classify
+from coursellm.security.output import validate_output
+from coursellm.security.sanitize import sanitize_query
+from coursellm.tools.registry import PROPOSAL_ERROR_PREFIX, ProposedAction, ToolOutcome
 
 logger = get_logger(__name__)
 
@@ -108,6 +112,9 @@ class ChatAnswer:
     intent: str = "tutor"
     trace_id: str | None = None
     tool_calls: list[ToolCallRecord] = field(default_factory=list)
+    #: Consequential writes the agent proposed but did not execute. The client
+    #: confirms one by returning its signed token to ``POST /chat/confirm``.
+    proposed_actions: list[ProposedAction] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,14 +152,21 @@ async def ask(
     ``agent`` (the default) routes the turn through the graph; ``rag`` runs the
     direct path. The engine is the only difference: validation, tenancy, the
     persistence columns and the citation/refusal machinery are shared.
+
+    The query is screened by the injection detector *before* any retrieval or
+    model call. A ``refuse`` verdict raises :class:`SafetyError` and no model is
+    contacted; a ``sanitize`` verdict removes the injected instruction spans from
+    what enters the prompt while the retrieval query keeps its length-capped
+    normalised form.
     """
+    safe_question = screen_query(settings, question)
     if engine == "agent":
         return await _ask_agent(
             session,
             settings,
             gateway,
             context,
-            question=question,
+            question=safe_question,
             course_id=course_id,
             conversation_id=conversation_id,
         )
@@ -162,6 +176,7 @@ async def ask(
         gateway,
         context,
         question=question,
+        prompt_question=safe_question,
         course_id=course_id,
         conversation_id=conversation_id,
     )
@@ -174,6 +189,7 @@ async def _ask_rag(
     context: TenantContext,
     *,
     question: str,
+    prompt_question: str | None = None,
     course_id: uuid.UUID | None,
     conversation_id: uuid.UUID | None,
 ) -> ChatAnswer:
@@ -183,15 +199,17 @@ async def _ask_rag(
         settings,
         context,
         question=question,
+        prompt_question=prompt_question,
         course_id=course_id,
         conversation_id=conversation_id,
     )
     generated = await build_generator(settings, gateway).answer(
-        question,
+        prepared.question,
         prepared.assembled,
         course_name=prepared.course_name,
         history=prepared.history,
     )
+    generated = _validated_generated(generated)
     degraded = unique([*prepared.degraded, *generated.degraded])
     await persist_assistant_message(
         session,
@@ -258,6 +276,7 @@ async def _ask_agent(
         intent=turn.intent,
         trace_id=tracing.current_trace_id(),
         tool_calls=turn.tool_calls,
+        proposed_actions=_proposals_from_records(turn.tool_calls),
     )
 
 
@@ -337,12 +356,22 @@ async def prepare_turn(
     context: TenantContext,
     *,
     question: str,
+    prompt_question: str | None = None,
     course_id: uuid.UUID | None,
     conversation_id: uuid.UUID | None,
 ) -> PreparedTurn:
-    """Retrieve, rank, assemble and persist the user message for one turn."""
+    """Retrieve, rank, assemble and persist the user message for one turn.
+
+    ``question`` is the retrieval query — the original, length-capped form.
+    ``prompt_question`` is what the model is asked; it defaults to a screened
+    form of ``question`` so a caller that reaches this function directly (the
+    streaming route) still gets detection, while the retrieval query is never
+    mutated by sanitisation (``security.md`` section 2.4).
+    """
     started_ns = time.monotonic_ns()
     validate_question(settings, question)
+    if prompt_question is None:
+        prompt_question = screen_query(settings, question)
     conversation = await _resolve_conversation(
         session,
         context,
@@ -402,7 +431,7 @@ async def prepare_turn(
 
     return PreparedTurn(
         conversation_id=conversation.id,
-        question=question,
+        question=prompt_question,
         course_name=course_name,
         assembled=assembled,
         degraded=unique([*semantic.degraded, *lexical.degraded, *ranking.degraded]),
@@ -425,7 +454,13 @@ async def persist_assistant_message(
     generated: GeneratedAnswer,
     degraded: Sequence[str],
 ) -> Message:
-    """Persist the assistant message, citations and degradation in this transaction."""
+    """Persist the assistant message, citations and degradation in this transaction.
+
+    Output validation runs here as well as in :func:`_ask_rag`, because the
+    streaming route persists directly from its completion event: the stored row
+    is always the redacted text even if the live token stream was not buffered.
+    """
+    generated = _validated_generated(generated)
     model = resolve_model(settings, ModelTask.TUTORING)
     token_count = (
         generated.usage.completion_tokens
@@ -469,6 +504,108 @@ def validate_question(settings: Settings, question: str) -> None:
             f"The question is {len(question)} characters long, which exceeds the "
             f"maximum of {settings.max_query_chars}."
         )
+
+
+def screen_query(settings: Settings, question: str) -> str:
+    """Classify a query and return the form that may enter the prompt.
+
+    A ``refuse`` verdict raises :class:`SafetyError` before retrieval and before
+    any model call. A ``sanitize`` verdict returns the question with the detected
+    instruction spans removed, so a legitimate question that merely *mentions*
+    injection is still answered. An ``allow`` verdict returns the query
+    unchanged. Detection is advisory: the structural defences are the evidence
+    fence and the tool permission matrix.
+    """
+    verdict = classify(question, settings=settings)
+    if verdict.level == "refuse":
+        logger.warning(
+            "query_refused_by_safety",
+            score=verdict.score,
+            classes=verdict.classes,
+        )
+        raise SafetyError(
+            "This request was refused by the safety layer because it appears to "
+            "attempt to override the system's instructions.",
+            fields={
+                "safety.verdict": "refuse",
+                "safety.score": verdict.score,
+                "safety.classes": verdict.classes,
+            },
+        )
+    if verdict.level == "sanitize":
+        logger.info(
+            "query_sanitized_for_prompt",
+            score=verdict.score,
+            classes=verdict.classes,
+        )
+        return sanitize_query(question, verdict, max_chars=settings.max_query_chars)
+    return question
+
+
+def _validated_generated(generated: GeneratedAnswer) -> GeneratedAnswer:
+    """Redact a generated answer and fold the validation into its degradation."""
+    validated = validate_output(generated.text)
+    if validated.text == generated.text and not validated.degraded:
+        return generated
+    return replace(
+        generated,
+        text=validated.text,
+        degraded=unique([*generated.degraded, *validated.degraded]),
+    )
+
+
+def _proposals_from_records(records: Sequence[ToolCallRecord]) -> list[ProposedAction]:
+    """Recover the withheld write proposals from the turn's audit records."""
+    proposals: list[ProposedAction] = []
+    for record in records:
+        error = record.get("error")
+        if not isinstance(error, str) or not error.startswith(PROPOSAL_ERROR_PREFIX):
+            continue
+        payload = error[len(PROPOSAL_ERROR_PREFIX) :]
+        try:
+            proposals.append(ProposedAction.model_validate_json(payload))
+        except Exception:
+            logger.warning("proposal_record_unparseable", tool=record.get("tool"))
+    return proposals
+
+
+async def confirm_proposal(
+    session: AsyncSession,
+    settings: Settings,
+    gateway: LLMGateway,
+    context: TenantContext,
+    *,
+    proposal_token: str,
+) -> ToolOutcome:
+    """Execute a confirmed proposal after server-side re-validation.
+
+    The endpoint that calls this is deterministic: it does not trust any field of
+    the request. The token is signature-verified and expiry-checked, the tenant is
+    taken from the authenticated context (never the token), the agent's permission
+    for the tool is re-checked against the live matrix, and the arguments are
+    re-validated against the tool's strict schema. Only then does the handler run.
+    """
+    from coursellm.agents.state import initial_state
+    from coursellm.tools import build_tool_registry
+    from coursellm.tools.registry import ToolExecutor
+
+    registry = build_tool_registry(settings)
+    executor = ToolExecutor(
+        registry,
+        settings=settings,
+        session=session,
+        gateway=gateway,
+        require_write_confirmation=True,
+    )
+    state = initial_state(
+        tenant_id=context.tenant_id,
+        user_id=context.user_id,
+        conversation_id=uuid.uuid4(),
+        request_id=uuid.uuid4(),
+        roles=frozenset({context.role.value}),
+        deadline_ns=time.monotonic_ns() + settings.agent_turn_deadline_ms * 1_000_000,
+    )
+    return await executor.confirm(proposal_token=proposal_token, state=state)
 
 
 # ---------------------------------------------------------------------------
@@ -620,8 +757,10 @@ __all__ = [
     "PreparedTurn",
     "ask",
     "build_generator",
+    "confirm_proposal",
     "persist_assistant_message",
     "prepare_turn",
+    "screen_query",
     "unique",
     "validate_question",
 ]

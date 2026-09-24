@@ -16,7 +16,8 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette import EventSourceResponse
@@ -26,6 +27,7 @@ from coursellm.api.deps import (
     LLMGatewayDep,
     SettingsDep,
     TenantSessionDep,
+    enforce_llm_rate_limit,
 )
 from coursellm.api.schemas.chat import (
     ChatRequest,
@@ -41,6 +43,7 @@ from coursellm.core.logging import get_logger
 from coursellm.db.models.conversation import Conversation, Message
 from coursellm.db.tenancy import TenantContext
 from coursellm.rag.generation.generator import GeneratedAnswer, TokenEvent
+from coursellm.security.output import redact_secrets
 from coursellm.services import chat as chat_service
 
 logger = get_logger(__name__)
@@ -64,6 +67,7 @@ _ERROR_DETAIL = (
         "retrieval-augmented path; both share the grounding, citation and refusal "
         "machinery and produce equivalent answers for a simple factual question."
     ),
+    dependencies=[Depends(enforce_llm_rate_limit)],
 )
 async def chat(
     payload: ChatRequest,
@@ -91,7 +95,72 @@ async def chat(
         usage=UsageSummary.model_validate(result.usage) if result.usage is not None else None,
         intent=result.intent,
         trace_id=result.trace_id,
+        proposed_actions=result.proposed_actions,
     )
+
+
+class ConfirmProposalRequest(BaseModel):
+    """The client confirms a withheld write by returning its signed token."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    token: str
+
+
+class ConfirmProposalResponse(BaseModel):
+    """The outcome of an executed proposal, or the reason it was refused."""
+
+    status: str
+    tool: str
+    result: dict[str, Any] | None = None
+    detail: str | None = None
+
+
+@router.post(
+    "/confirm",
+    response_model=ConfirmProposalResponse,
+    summary="Confirm and execute a proposed action",
+    description=(
+        "Execute a write the agent proposed but did not perform. The body carries "
+        "only the signed token from the proposal; the server re-validates the "
+        "signature, expiry, the current tenant, the permission matrix and the "
+        "tool's argument schema before the handler runs. The model never holds an "
+        "execution capability for a consequential action."
+    ),
+    dependencies=[Depends(enforce_llm_rate_limit)],
+)
+async def confirm_proposal(
+    payload: ConfirmProposalRequest,
+    context: ContextDep,
+    settings: SettingsDep,
+    session: TenantSessionDep,
+    gateway: LLMGatewayDep,
+) -> ConfirmProposalResponse:
+    outcome = await chat_service.confirm_proposal(
+        session,
+        settings,
+        gateway,
+        context,
+        proposal_token=payload.token,
+    )
+    status = str(outcome.record["status"])
+    return ConfirmProposalResponse(
+        status=status,
+        tool=str(outcome.record["tool"]),
+        result=_serialise_result(outcome.result),
+        detail=outcome.record["error"] if status != "ok" else None,
+    )
+
+
+def _serialise_result(result: Any) -> dict[str, Any] | None:
+    """Render a typed tool result for the confirmation response."""
+    if isinstance(result, BaseModel):
+        return result.model_dump(mode="json")
+    if isinstance(result, dict):
+        return result
+    if result is None:
+        return None
+    return {"value": result}
 
 
 @router.post(
@@ -105,6 +174,7 @@ async def chat(
         "the stream fails. With ``engine='agent'`` (the default) the graph runs "
         "the turn first and its answer is emitted as a single ``token`` event."
     ),
+    dependencies=[Depends(enforce_llm_rate_limit)],
 )
 async def stream_chat(
     payload: ChatRequest,
@@ -149,7 +219,10 @@ async def stream_chat(
                 history=prepared.history,
             ):
                 if isinstance(event, TokenEvent):
-                    yield {"event": "token", "data": _encode({"text": event.text})}
+                    # Redact each delta so a credential cannot reach the client
+                    # even before the completion is validated and persisted.
+                    safe_text, _ = redact_secrets(event.text)
+                    yield {"event": "token", "data": _encode({"text": safe_text})}
                 else:
                     completion = event.answer
             if completion is None:
@@ -187,7 +260,16 @@ async def _agent_events(result: chat_service.ChatAnswer) -> AsyncIterator[dict[s
             "event": "citations",
             "data": _encode([citation.model_dump(mode="json") for citation in result.citations]),
         }
-        yield {"event": "done", "data": "{}"}
+        yield {
+            "event": "done",
+            "data": _encode(
+                {
+                    "proposed_actions": [
+                        action.model_dump(mode="json") for action in result.proposed_actions
+                    ]
+                }
+            ),
+        }
     except Exception:
         logger.exception("chat_stream_failed")
         yield {"event": "error", "data": _encode({"detail": _ERROR_DETAIL})}

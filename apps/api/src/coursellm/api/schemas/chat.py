@@ -18,6 +18,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from coursellm.db.models.conversation import MessageRole
+from coursellm.tools.registry import ProposedAction
 
 # The service enforces ``settings.max_query_chars``; this bound is a transport
 # guard so that a pathological body is rejected before it reaches the domain.
@@ -86,6 +87,10 @@ class ChatResponse(BaseModel):
     #: The active trace id, so a stored answer can be joined to the trace that
     #: produced it. ``None`` when tracing is disabled.
     trace_id: str | None = None
+    #: Consequential writes the agent proposed but did not execute. The client
+    #: confirms one by returning its signed ``token`` to ``POST /chat/confirm``;
+    #: the model never holds an execution capability for these actions.
+    proposed_actions: list[ProposedAction] = Field(default_factory=list)
 
 
 class ConversationSummary(BaseModel):
