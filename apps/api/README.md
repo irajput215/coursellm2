@@ -14,6 +14,7 @@ See the [repository README](../../README.md) for the product overview and
 |---------|----------------|
 | `coursellm.core` | Configuration, logging with redaction, error hierarchy, telemetry |
 | `coursellm.db` | SQLAlchemy models, async session management, tenancy context, RLS helpers |
+| `coursellm.repositories` | The only sanctioned access path to tenant-scoped data; every repository requires a tenant scope |
 | `coursellm.llm` | LiteLLM gateway: task-based routing, retries, fallbacks, cost accounting |
 | `coursellm.rag` | Ingestion, hybrid retrieval, fusion, reranking, context assembly, generation |
 | `coursellm.graph` | Knowledge graph extraction and traversal |
@@ -58,4 +59,9 @@ make test-all         # everything, with coverage
   opted in. Redaction is applied by a logging processor, not by convention.
 - **Tenant identity is never an LLM-supplied argument.** It comes from the
   authenticated request context.
+- **Two database roles.** The application connects as a role with `NOSUPERUSER
+  NOBYPASSRLS`; the schema owner runs migrations. PostgreSQL ignores every
+  Row-Level Security policy for a superuser, so a single-role setup makes tenant
+  isolation look enforced when it is not. `make db-inspect` reports which role
+  you are connected as.
 - **Every external dependency has a declared failure path** and a test for it.

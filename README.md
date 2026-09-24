@@ -32,11 +32,17 @@ repository.
 ## Quick start
 
 ```bash
-make db-create      # create dev + test databases with pgvector
 make install        # core + dev dependencies
-make migrate        # apply migrations
+make db-setup       # databases, schema, and the restricted application role
 make api            # http://localhost:8000/docs
 ```
+
+`make db-setup` provisions two database roles: the schema owner that runs
+migrations, and `coursellm_app`, which runs the application and **cannot bypass
+Row-Level Security**. That split is not ceremony — PostgreSQL ignores every RLS
+policy for a superuser, so developing as one hides the failure until production.
+`make db-inspect` reports which role you are connected as and whether tenant
+isolation is actually enforced.
 
 ```bash
 make test           # fast unit tests

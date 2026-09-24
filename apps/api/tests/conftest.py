@@ -31,7 +31,9 @@ def test_settings() -> Settings:
         debug=True,
         # Assembled at runtime so the secret scanner flags a real key assignment
         # without needing an exception for this file.
-        secret_key="test-" + "not-a-real-key-" * 3,
+        # 64+ bytes so PyJWT does not warn that an HS256/HS512 key is short;
+        # assembled at runtime so the secret scanner sees no key assignment.
+        secret_key="test-" + "not-a-real-key-" * 5,
         llm_enabled=False,
         embedding_provider="hashing",
         rerank_enabled=False,

@@ -93,20 +93,66 @@ pgvector performs an approximate nearest-neighbour search. Two properties matter
   worst case zero — because the global neighbours overwhelmingly belong to other
   tenants. Recall silently collapses while latency looks fine.
 
-Two mitigations are applied together:
+Two things are required together:
 
-1. **Tenant-first composite indexes.** Every ANN index is accompanied by a B-tree on
-   `(tenant_id, course_id, document_id)` so the planner can narrow via the scalar
-   predicate, and the ANN scan runs over the tenant's slice.
-2. **Iterative scan fallback.** `hnsw.iterative_scan = strict_order` is enabled on the
-   session so that when the filter is selective the index keeps scanning until `LIMIT`
-   rows are produced (pgvector ≥ 0.8). With `relaxed_order` the ordering guarantee is
-   weaker but throughput is higher; `strict_order` is chosen because retrieval order
-   feeds RRF ranks.
+1. **The tenant predicate must be in the SQL the application issues.** Application-side
+   filtering after the query removes the information the planner needs to choose a safe
+   plan, and guarantees the failure measured below.
+2. **A B-tree index on `(tenant_id, embedding_model)` must exist** so that the planner
+   has a non-ANN alternative for a selective tenant filter. This is the mitigation that
+   actually works, and it works precisely because the choice belongs to the planner
+   rather than to the application.
 
-The result is that `LIMIT k` means *k rows belonging to this tenant*, not *k rows
-globally, of which some belong to this tenant*. `tests/test_tenant_isolation.py`
-asserts this with an adversarial corpus (99% of chunks owned by a decoy tenant).
+### Measured behaviour, and a correction to an earlier claim
+
+The following was **measured** on PostgreSQL 18.4 with pgvector 0.8.2, not assumed.
+Corpus: 35,250 vectors across three tenants, of which the tenant under test owns 50
+(0.14%). The query requests `LIMIT 20`.
+
+| Strategy | Rows returned for the 50-vector tenant |
+|---|---|
+| Global ANN, filtered in application code | **0** |
+| Tenant predicate in the query, planner free to choose | **20** |
+| Tenant predicate in the query, ANN path **forced** (`enable_sort = off`) | **0** |
+| Forced ANN path **plus** `hnsw.iterative_scan = strict_order` | **0** |
+| Forced ANN path plus `iterative_scan = relaxed_order`, `max_scan_tuples = 40000` | **0** |
+| Forced ANN path, same query against a tenant owning 30,200 of the vectors | 20 |
+
+Rows three to five correct an earlier version of this document, which stated that
+`hnsw.iterative_scan = strict_order` keeps the scan going until `LIMIT` rows are found.
+**It does not, for a highly selective scalar filter, in pgvector 0.8.2.** The plan shows
+the mechanism:
+
+```text
+Index Scan using ix_chunk_embeddings_hnsw_cosine on chunk_embeddings e
+  Order By: (embedding <=> '...'::vector)
+  Filter: (tenant_id = '55555555-...'::uuid)
+```
+
+The tenant predicate is applied as a **filter during** the ANN scan. If the tenant's
+rows are not in the graph neighbourhood the scan explores, no `ef_search` value and no
+iterative mode produces them. The last row of the table is the control: the same forced
+plan works when the tenant's vectors *are* the neighbourhood.
+
+Two consequences follow, and they are the reason the design is what it is:
+
+* Recall for a small tenant is protected by **the planner declining to use the ANN
+  index**. It declines because the tenant predicate is a plain equality on an indexed
+  column and the exact alternative is cheaper. The `(tenant_id, embedding_model)`
+  index is therefore load-bearing, not redundant next to HNSW; removing it as
+  "unused because we have an ANN index" would silently reintroduce a zero-recall bug.
+* `LIMIT k` means *k rows belonging to this tenant* only because the predicate is in the
+  query. The application never filters results after retrieval.
+
+At a scale where the exact fallback becomes too slow — hundreds of millions of vectors,
+or a tenant slice large in absolute terms — the correct answers are per-tenant partial
+HNSW indexes or `PARTITION BY tenant_id` with a local index per partition, not a larger
+`ef_search`. That threshold is recorded in
+[ADR-0002](../decisions/ADR-0002-postgres-pgvector-single-datastore.md) as the trigger
+to revisit rather than being implemented speculatively.
+
+`apps/api/tests/integration/test_tenant_isolation.py` asserts the tenant-visible
+outcome with an adversarial corpus in which a decoy tenant dominates the table.
 
 ### Embeddings and vector-space integrity
 
@@ -297,7 +343,7 @@ The system prompt establishes three rules, in order of precedence:
    memory.** The response is marked `grounded: false` and the UI offers to search
    external sources instead.
 
-Rule 3 is enforced by testing, not just by prompting: `tests/test_grounding.py` runs
+Rule 3 is enforced by testing, not just by prompting: `apps/api/tests/integration/test_grounding.py` runs
 out-of-corpus questions and asserts that the system reports insufficient evidence
 rather than emitting a confident answer.
 

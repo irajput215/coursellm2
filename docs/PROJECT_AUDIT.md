@@ -507,12 +507,12 @@ flowchart TB
 Every architectural claim above is backed by a test or an artefact, because the central
 lesson of this audit is that unverified claims rot:
 
-- tenancy → `tests/test_tenant_isolation.py` with an adversarial decoy corpus
+- tenancy → `apps/api/tests/integration/test_tenant_isolation.py` with an adversarial decoy corpus
 - pre-filtering → an empirical demonstration (§9)
 - BM25 → an IDF unit test with a known corpus and hand-computed expected scores
 - RRF → a unit test with hand-computed expected fusion scores
-- grounding → `tests/test_grounding.py`, which asserts refusal on out-of-corpus questions
-- injection → `tests/security/` with crafted adversarial document fixtures
+- grounding → `apps/api/tests/integration/test_grounding.py`, which asserts refusal on out-of-corpus questions
+- injection → `apps/api/tests/security/` with crafted adversarial document fixtures
 - quality → `evals/` with a committed dataset and report artefacts
 
 ---

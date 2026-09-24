@@ -138,7 +138,7 @@ graph store is projected from it, so the migration is reversible.
 
 ## How this is verified
 
-- `tests/test_knowledge_graph.py` covers cycle handling (an edge cycle must
+- `apps/api/tests/integration/test_knowledge_graph.py` covers cycle handling (an edge cycle must
   terminate), the depth cap, deduplication of multiple paths to one concept, and
   tenant isolation.
 - `EXPLAIN (ANALYZE, BUFFERS)` for the closure query is asserted against a seeded
