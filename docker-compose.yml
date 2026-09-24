@@ -1,0 +1,274 @@
+# CourseLLM — local compose stack.
+#
+# Bring the whole system up from a clean checkout with:
+#
+#     cp .env.example .env      # then set a real SECRET_KEY
+#     make up                   # = docker compose up --build -d
+#
+# Every credential comes from `.env` at run time (or from the ambient
+# environment); none is written in this file and none is baked into an image
+# (.dockerignore excludes .env from every build context). SECRET_KEY is
+# referenced as `${SECRET_KEY:?...}` — mandatory and with no default — so a
+# checkout that has not set one fails immediately instead of starting with a
+# placeholder.
+#
+# ---------------------------------------------------------------------------
+# Startup order, and why
+# ---------------------------------------------------------------------------
+#
+#   postgres (healthy) ─┐
+#   redis    (started) ─┼──▶ migrate (owner, one-shot, must exit 0) ──▶ api ──▶ web
+#                       │        1. CREATE EXTENSION IF NOT EXISTS vector
+#                       │        2. assert the extension is present
+#                       │        3. alembic upgrade head
+#                       │        4. scripts/bootstrap_db.sql  -> coursellm_app
+#                       └──▶ api also waits for postgres to be healthy
+#
+# `migrate` runs as the schema OWNER. It creates the restricted `coursellm_app`
+# role (NOSUPERUSER NOBYPASSRLS) *after* the tables exist, which is exactly what
+# makes Row-Level Security apply inside the container: a superuser, or any role
+# with BYPASSRLS, ignores every policy silently. This mirrors `make db-setup`
+# locally (db-create -> migrate -> db-bootstrap).
+#
+# `api` waits for `migrate` to exit 0 rather than for the database merely to
+# accept connections. Two API replicas starting concurrently would otherwise
+# both run `alembic upgrade head` and race to create the same schema.
+
+name: coursellm
+
+# Shared by `api` and `migrate`: the migration task uses the same image as the
+# API, so the migration code and the application code are provably the same
+# commit (docs/architecture/deployment.md section 7).
+x-api-build: &api-build
+  context: .
+  dockerfile: docker/api.Dockerfile
+  args:
+    # Empty by default: core + `docx` only. `embeddings,rerank` pulls PyTorch.
+    # See docker/README.md for the size trade-off.
+    INSTALL_EXTRAS: ${INSTALL_EXTRAS:-}
+
+services:
+  # ---------------------------------------------------------------------------
+  # Data stores
+  # ---------------------------------------------------------------------------
+  postgres:
+    # pgvector-enabled, so `CREATE EXTENSION vector` can succeed. The API must
+    # never start against a Postgres that lacks it; see the migrate service.
+    image: pgvector/pgvector:pg17@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f
+    restart: unless-stopped
+    environment:
+      # No `${VAR:-default}` for these two anywhere in this file, deliberately.
+      # They appear inside connection URLs, and a `${VAR:-default}` contains a
+      # colon that makes the URL look like `user:password@host` to the
+      # repository's secret scanner (scripts/scan_secrets.sh). `.env.example`
+      # defines both, and `.env` is required anyway for SECRET_KEY.
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      # LOCAL DEVELOPMENT ONLY, and deliberately explicit. `trust` lets any
+      # local client connect as any existing role without a password; it mirrors
+      # the Homebrew default that scripts/bootstrap_db.sql documents, which is
+      # what lets the app role be created with no password. It is NOT
+      # appropriate anywhere but a workstation, which is why the port is bound
+      # to loopback. Deployed Postgres uses Secrets Manager credentials and TLS
+      # (docs/architecture/deployment.md section 9).
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      # Loopback only: the container network is the only place that needs a
+      # routable Postgres. Publish to 0.0.0.0 only on a trusted workstation.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [coursellm]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    restart: unless-stopped
+    # Cache only: no RDB snapshots, no AOF. Redis is optional at runtime — the
+    # API bypasses caching and fails rate limiting open when it is unreachable —
+    # so losing its contents on restart is intended, not an incident.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redisdata:/data
+    networks: [coursellm]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # One-shot schema owner: migrations, then the restricted role
+  # ---------------------------------------------------------------------------
+  migrate:
+    image: coursellm-api:local
+    build: *api-build
+    # A one-shot task, not a service: it must exit 0 for `api` to start, and it
+    # must not be restarted on failure (a failed migration should stop the
+    # deploy, not loop).
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        echo "[migrate] ensuring the pgvector extension (role: $$PGUSER)"
+        psql -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION IF NOT EXISTS vector'
+        psql -tAc "SELECT 1 FROM pg_extension WHERE extname='vector'" | grep -q 1
+        echo "[migrate] alembic upgrade head (schema owner)"
+        alembic upgrade head
+        echo "[migrate] scripts/bootstrap_db.sql -> coursellm_app (NOSUPERUSER NOBYPASSRLS)"
+        psql -v ON_ERROR_STOP=1 -f /app/scripts/bootstrap_db.sql
+        echo "[migrate] complete"
+    env_file:
+      # Optional so `docker compose config` works on a checkout that has not yet
+      # run `cp .env.example .env`; SECRET_KEY below is still mandatory.
+      - path: .env
+        required: false
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-local}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required — copy .env.example to .env and set a real value}
+      # The OWNER connection. Alembic reads ALEMBIC_DATABASE_URL in preference
+      # to DATABASE_URL, which is what lets the application role stay restricted
+      # while schema changes are made by the owner.
+      ALEMBIC_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}@postgres:5432/${POSTGRES_DB}
+      DATABASE_URL: postgresql+asyncpg://coursellm_app@postgres:5432/${POSTGRES_DB}
+      # libpq/psql(1) identity, used for the bootstrap SQL above.
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: ${POSTGRES_USER}
+      PGDATABASE: ${POSTGRES_DB}
+      PROMPTS_DIR: /app/prompts
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [coursellm]
+
+  # ---------------------------------------------------------------------------
+  # Application
+  # ---------------------------------------------------------------------------
+  api:
+    image: coursellm-api:local
+    build: *api-build
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-local}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required — copy .env.example to .env and set a real value}
+      # In-network addresses override whatever `.env` says for localhost.
+      DATABASE_URL: postgresql+asyncpg://coursellm_app@postgres:5432/${POSTGRES_DB}
+      # Only Alembic reads this, and only when `alembic` is run *inside* the api
+      # container; the API itself never reads it. Overriding it stops it from
+      # pointing at a localhost database that does not exist in this network.
+      ALEMBIC_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      PROMPTS_DIR: /app/prompts
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      # libpq/psql(1) identity for the readiness healthcheck below, and for
+      # `docker compose exec api psql` when debugging. No password: local
+      # `trust` auth (see postgres above).
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: coursellm_app
+      PGDATABASE: ${POSTGRES_DB}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      # The local object store writes under REPO_ROOT/uploads; the container
+      # REPO_ROOT is /app, and the volume is seeded with uid 10001 from the
+      # image so the non-root process can write it.
+      - uploads:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        # The load-bearing ordering: migrations AND the restricted-role bootstrap
+        # must both have completed before any API process starts.
+        condition: service_completed_successfully
+      redis:
+        # Started, not healthy: Redis is gracefully optional, so a cache outage
+        # must not stop the API from serving.
+        condition: service_started
+    healthcheck:
+      # Readiness, not liveness. It asks /readyz (which checks the database via
+      # a critical registered probe) AND asserts directly that the pgvector
+      # extension exists for the application role. The image-level HEALTHCHECK
+      # stays liveness-only because a dependency-aware probe there causes restart
+      # loops; compose never restarts an unhealthy container, so this is safe.
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=3)"
+          && psql -tAc "SELECT 1 FROM pg_extension WHERE extname='vector'" | grep -q 1
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks: [coursellm]
+
+  web:
+    image: coursellm-web:local
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+      args:
+        # Inlined into the bundle by Vite at build time, so it must be a public
+        # URL and never a secret. Empty means same-origin, which is what the
+        # nginx /api/ proxy provides.
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
+    restart: unless-stopped
+    depends_on:
+      api:
+        # The static assets are served whether or not the API is ready; nginx
+        # returns 502 on /api until it is. Coupling web startup to API
+        # readiness would hide the UI behind an API problem.
+        condition: service_started
+    ports:
+      # The web image runs nginx as the non-root user (uid 101) and therefore
+      # listens on 8080 inside the container.
+      - "${WEB_PORT:-5173}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    networks: [coursellm]
+
+  # ---------------------------------------------------------------------------
+  # Optional tracing backend (profile: otel)
+  # ---------------------------------------------------------------------------
+  otel-collector:
+    # `docker compose --profile otel up -d`, with OTEL_ENABLED=true in .env.
+    image: otel/opentelemetry-collector-contrib:0.128.0@sha256:1ab0baba0ee3695d823c46653d8a6e8894896e668ce8bd7ebe002e948d827bc7
+    profiles: ["otel"]
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./docker/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "127.0.0.1:4317:4317"   # OTLP/gRPC
+      - "127.0.0.1:4318:4318"   # OTLP/HTTP (what the API exports to)
+      - "127.0.0.1:8889:8889"   # the collector's own Prometheus metrics
+      - "127.0.0.1:13133:13133" # health_check extension
+    networks: [coursellm]
+    # No healthcheck: this image is distroless (no shell, no curl/wget), so there
+    # is nothing for Docker to execute. :13133 is the health endpoint for an
+    # orchestrator that can speak HTTP.
+
+volumes:
+  pgdata:
+  redisdata:
+  uploads:
+
+networks:
+  coursellm:
+    driver: bridge
