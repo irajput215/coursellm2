@@ -73,6 +73,9 @@ fmt: ## Format Python and frontend sources
 .PHONY: lint
 lint: ## Lint Python sources
 	$(VENV)/bin/ruff check $(API_DIR) evals
+
+.PHONY: format-check
+format-check: ## Fail if Python sources are not formatted
 	$(VENV)/bin/ruff format --check $(API_DIR) evals
 
 .PHONY: lint-web
@@ -90,6 +93,12 @@ typecheck-web: ## Type-check the frontend
 
 # ---------------------------------------------------------------------------
 # Tests
+#
+# Order matters in `verify`: the cheap, deterministic checks run first so a
+# formatting or lint error fails in seconds rather than after the four-minute
+# integration tier. Coverage is one command (`test-coverage`) that runs every
+# non-eval tier in a single process, because the threshold is a property of the
+# whole suite and a per-tier figure would double-count core modules.
 # ---------------------------------------------------------------------------
 .PHONY: test
 test: test-unit ## Run the default (fast) test suite
@@ -107,10 +116,14 @@ test-integration: ## Integration tests; requires PostgreSQL (see TEST_DATABASE_U
 test-security: ## Adversarial security regression tests
 	cd $(API_DIR) && ../../$(VENV)/bin/pytest -m security -q
 
-.PHONY: test-all
-test-all: ## Everything, with coverage
+.PHONY: test-coverage
+test-coverage: ## Unit + security + integration with coverage; fails below fail_under
 	cd $(API_DIR) && TEST_DATABASE_URL="$(TEST_DATABASE_URL)" \
-		../../$(VENV)/bin/pytest -q --cov=coursellm --cov-report=term-missing --cov-report=xml
+		../../$(VENV)/bin/pytest -m "unit or security or integration" -q \
+		--cov=coursellm --cov-report=term-missing --cov-report=xml
+
+.PHONY: test-all
+test-all: test-coverage ## Alias kept for older runbooks; runs the coverage suite
 
 .PHONY: test-web
 test-web: ## Frontend tests
@@ -234,12 +247,12 @@ eval: ## Run the RAG evaluation suite and write a report artefact
 eval-retrieval: ## Retrieval-only metrics (no LLM required)
 	$(PY) -m evals.runners.run_retrieval_eval --output evals/reports/retrieval.json
 
-# Which report `eval-gate` compares. The default is the full-RAG artefact written
-# by `make eval`. CI overrides it with `evals/reports/retrieval.json`, the report
-# `make eval-retrieval` writes, because the committed baseline is a retrieval run
-# and the retrieval half needs no provider key. Without the override the gate
-# would compare a stale, gitignored `latest.json` and grade nothing.
-EVAL_CURRENT ?= evals/reports/latest.json
+# Which report `eval-gate` compares. The default is the retrieval report, which
+# is committed and needs no provider key, so `make verify` can run the gate on a
+# clean clone. CI overrides it explicitly for the same reason: the committed
+# baseline is a retrieval run, and comparing it against a full-RAG `latest.json`
+# (which is gitignored and may not exist) would grade a stale artefact.
+EVAL_CURRENT ?= evals/reports/retrieval.json
 
 .PHONY: eval-gate
 eval-gate: ## Compare an eval report against the committed baseline; non-zero on regression
@@ -283,7 +296,23 @@ audit-deps: ## Audit the installed environment against known dependency advisori
 # Composite gates
 # ---------------------------------------------------------------------------
 .PHONY: verify
-verify: lint typecheck secrets-scan test-all ## The full local quality gate
+verify: ## The full local quality gate, cheapest checks first
+	@echo "==> 1/8 format check"
+	@$(MAKE) --no-print-directory format-check
+	@echo "==> 2/8 lint"
+	@$(MAKE) --no-print-directory lint
+	@echo "==> 3/8 typecheck"
+	@$(MAKE) --no-print-directory typecheck
+	@echo "==> 4/8 secret scan"
+	@$(MAKE) --no-print-directory secrets-scan
+	@echo "==> 5/8 unit"
+	@$(MAKE) --no-print-directory test-unit
+	@echo "==> 6/8 security"
+	@$(MAKE) --no-print-directory test-security
+	@echo "==> 7/8 integration"
+	@$(MAKE) --no-print-directory test-integration
+	@echo "==> 8/8 eval gate"
+	@$(MAKE) --no-print-directory eval-gate
 
 .PHONY: verify-web
 verify-web: lint-web typecheck-web test-web build-web ## The frontend quality gate
