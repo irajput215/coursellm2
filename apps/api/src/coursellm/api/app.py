@@ -181,12 +181,14 @@ def _build_api_router() -> APIRouter:
     Domain routers are added here as they are implemented, so the public surface
     is auditable in one place rather than inferred from filesystem discovery.
     """
-    from coursellm.api.routers import auth, chat, courses
+    from coursellm.api.routers import auth, chat, courses, roadmaps
 
     router = APIRouter()
     router.include_router(auth.router)
     router.include_router(courses.router)
     router.include_router(chat.router)
+    router.include_router(roadmaps.router)
+    router.include_router(roadmaps.progress_router)
     return router
 
 
@@ -212,6 +214,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "description": (
                     "Grounded tutoring chat: retrieval, citations, refusal and "
                     "conversation history."
+                ),
+            },
+            {
+                "name": "roadmaps",
+                "description": (
+                    "Personalised, ordered learning roadmaps: creation from a goal, "
+                    "deterministic effort estimates, progress-driven revision and step "
+                    "advancement."
+                ),
+            },
+            {
+                "name": "progress",
+                "description": (
+                    "The caller's projected mastery, weak and stale concepts, learning "
+                    "velocity and the next recommended action."
                 ),
             },
         ],

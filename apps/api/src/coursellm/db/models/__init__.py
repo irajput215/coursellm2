@@ -39,6 +39,15 @@ from coursellm.db.models.identity import (
     User,
     UserRole,
 )
+from coursellm.db.models.learning import (
+    ProgressEvent,
+    ProgressEventKind,
+    QuizAttempt,
+    Roadmap,
+    RoadmapStatus,
+    RoadmapStep,
+    RoadmapStepStatus,
+)
 from coursellm.db.models.usage import LLMUsage
 
 __all__ = [
@@ -59,8 +68,15 @@ __all__ = [
     "LLMUsage",
     "Message",
     "MessageRole",
+    "ProgressEvent",
+    "ProgressEventKind",
     "QuarantineState",
+    "QuizAttempt",
     "RefreshTokenRevocation",
+    "Roadmap",
+    "RoadmapStatus",
+    "RoadmapStep",
+    "RoadmapStepStatus",
     "SourceType",
     "Tenant",
     "TenantCorpusStats",
