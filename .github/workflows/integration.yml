@@ -1,0 +1,108 @@
+# Integration tests against a real PostgreSQL 17 with pgvector.
+#
+# The load-bearing convention is the role split. `scripts/bootstrap_db.sql`
+# creates `coursellm_app` as NOSUPERUSER NOBYPASSRLS and the suite connects as
+# that role, because PostgreSQL silently ignores every Row-Level Security policy
+# for a superuser or any role holding BYPASSRLS. Running the isolation tests as
+# the owner would make them pass for the wrong reason, so this workflow asserts
+# `db-inspect` reports ENFORCED before it runs a single test and fails the job
+# otherwise.
+#
+# The service uses trust authentication, mirroring the local Homebrew posture
+# documented in `scripts/bootstrap_db.sql` (the app role is created with no
+# password). The container is reachable only from this job's network namespace.
+
+name: integration
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  postgres:
+    name: PostgreSQL + pgvector integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_DB: coursellm_dev
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d coursellm_dev"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # `createdb` and `psql` in the Makefile take no `-U` flag; PGUSER is the
+      # supported way to make them act as the schema owner in CI.
+      PGUSER: postgres
+      DB_HOST: localhost
+      DB_PORT: "5432"
+      DB_NAME: coursellm_dev
+      TEST_DB_NAME: coursellm_test
+      DB_USER: postgres
+      APP_ROLE: coursellm_app
+      ENVIRONMENT: local
+      DATABASE_URL: postgresql+asyncpg://coursellm_app@localhost:5432/coursellm_dev
+      ALEMBIC_DATABASE_URL: postgresql+asyncpg://postgres@localhost:5432/coursellm_dev
+      TEST_DATABASE_URL: postgresql+asyncpg://coursellm_app@localhost:5432/coursellm_test
+      TEST_ALEMBIC_DATABASE_URL: postgresql+asyncpg://postgres@localhost:5432/coursellm_test
+      # Read directly by apps/api/tests/integration/conftest.py, which otherwise
+      # falls back to `getpass.getuser()` and would pick a role that does not
+      # exist in the runner image.
+      TEST_OWNER_DATABASE_URL: postgresql+asyncpg://postgres@localhost:5432/coursellm_test
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('apps/api/pyproject.toml', 'pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install
+        run: make install
+
+      - name: Create the databases and the pgvector extension
+        run: make db-create
+
+      - name: Migrate as the schema owner
+        run: make migrate migrate-test
+
+      - name: Create the restricted application role
+        run: make db-bootstrap
+
+      # The single most important assertion in this workflow. A green suite run
+      # as a superuser would be a false negative for every RLS test.
+      - name: Assert RLS is enforced for the application role
+        run: |
+          set -euo pipefail
+          make db-inspect DATABASE_URL="$TEST_DATABASE_URL" | tee /tmp/db-inspect.txt
+          grep -q 'ENFORCED by Row-Level Security' /tmp/db-inspect.txt
+
+      - name: Integration tests as the application role
+        run: make test-integration

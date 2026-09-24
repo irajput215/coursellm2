@@ -1,0 +1,117 @@
+# Backend quality gate: lint, typecheck, secret scan, unit tests, security tests.
+#
+# Every step is a Makefile target, so a green pipeline means exactly what a green
+# `make verify` means on a workstation. The workflow adds only the things CI
+# owns: a pinned interpreter, a dependency cache, a concurrency group and a
+# timeout on every job.
+#
+# Actions are pinned to a major version (never `@main`). `permissions` is
+# `contents: read` at the workflow level because none of these jobs writes
+# anything back to the repository.
+
+name: backend
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static-analysis:
+    name: lint + typecheck + secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Keyed on the only dependency manifests the repository has. There is no
+      # lockfile yet (see .github/workflows/README.md); when one lands, add it to
+      # hashFiles() here so the cache invalidates on a real dependency change.
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('apps/api/pyproject.toml', 'pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install
+        run: make install
+
+      - name: Lint
+        run: make lint
+
+      - name: Type-check
+        run: make typecheck
+
+      - name: Secret scan
+        run: make secrets-scan
+
+  unit:
+    name: unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('apps/api/pyproject.toml', 'pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install
+        run: make install
+
+      - name: Unit tests
+        run: make test-unit
+
+  security:
+    name: security tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('apps/api/pyproject.toml', 'pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install
+        run: make install
+
+      # The adversarial injection corpus is a required PR check, not a detail of
+      # the security workflow: a regression here is a security regression.
+      - name: Security regression tests
+        run: make test-security
