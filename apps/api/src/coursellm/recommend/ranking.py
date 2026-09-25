@@ -38,6 +38,7 @@ import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 from coursellm.db.models.resource import Resource
 from coursellm.recommend.catalogue import ResourceCandidate
@@ -74,6 +75,49 @@ NEUTRAL_RATING = 0.5
 MIN_GAP_WEIGHT = 0.1
 #: Difficulty target used when the caller does not supply one (mid-scale).
 NEUTRAL_DIFFICULTY_TARGET = int((MIN_DIFFICULTY + MAX_DIFFICULTY) / 2)
+
+_WEIGHT_SUM_TOLERANCE = 1e-9
+
+
+@dataclass(frozen=True, slots=True)
+class RecommendationWeights:
+    """The four score weights plus the coverage floor.
+
+    Frozen and validated: the four weights are a convex combination, so a
+    drifted set changes what "best resource" means without any error. The
+    application reads them from :class:`~coursellm.core.config.Settings`
+    (``RECOMMEND_WEIGHT_*`` / ``RECOMMEND_MIN_GAP_WEIGHT``); the literals here
+    are the pure-function defaults.
+    """
+
+    coverage: float = SCORE_WEIGHT_COVERAGE
+    difficulty: float = SCORE_WEIGHT_DIFFICULTY
+    trust: float = SCORE_WEIGHT_TRUST
+    recency: float = SCORE_WEIGHT_RECENCY
+    min_gap_weight: float = MIN_GAP_WEIGHT
+
+    def __post_init__(self) -> None:
+        total = self.coverage + self.difficulty + self.trust + self.recency
+        if abs(total - 1.0) > _WEIGHT_SUM_TOLERANCE:
+            msg = f"The recommendation score weights must sum to 1.0; got {total!r}."
+            raise ValueError(msg)
+        if not 0.0 < self.min_gap_weight <= 1.0:
+            msg = f"min_gap_weight must be in (0, 1]; got {self.min_gap_weight!r}."
+            raise ValueError(msg)
+
+
+DEFAULT_RECOMMENDATION_WEIGHTS = RecommendationWeights()
+
+
+def recommendation_weights(settings: Any) -> RecommendationWeights:
+    """The recommendation weights from configuration."""
+    return RecommendationWeights(
+        coverage=settings.recommend_weight_coverage,
+        difficulty=settings.recommend_weight_difficulty,
+        trust=settings.recommend_weight_trust,
+        recency=settings.recommend_weight_recency,
+        min_gap_weight=settings.recommend_min_gap_weight,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,8 +169,10 @@ def _clip01(value: float) -> float:
     return max(0.0, min(1.0, value))
 
 
-def _gap_weight(mastery: float) -> float:
-    return max(MIN_GAP_WEIGHT, 1.0 - _clip01(mastery))
+def _gap_weight(
+    mastery: float, *, weights: RecommendationWeights = DEFAULT_RECOMMENDATION_WEIGHTS
+) -> float:
+    return max(weights.min_gap_weight, 1.0 - _clip01(mastery))
 
 
 def coverage_for(
@@ -168,6 +214,7 @@ def score_candidate(
     difficulty_target: int,
     now: datetime,
     personalised: bool,
+    weights: RecommendationWeights = DEFAULT_RECOMMENDATION_WEIGHTS,
 ) -> ScoredResource:
     """Score one candidate, returning every contribution used to do it."""
     covered = tuple(sorted(slug for slug in candidate.covered_slugs if slug in gap_slugs))
@@ -176,10 +223,10 @@ def score_candidate(
     trust = TRUST_SCORES[candidate.resource.trust]
     recency_quality = recency_quality_for(candidate.resource, now)
     total = (
-        SCORE_WEIGHT_COVERAGE * coverage
-        + SCORE_WEIGHT_DIFFICULTY * difficulty_fit
-        + SCORE_WEIGHT_TRUST * trust
-        + SCORE_WEIGHT_RECENCY * recency_quality
+        weights.coverage * coverage
+        + weights.difficulty * difficulty_fit
+        + weights.trust * trust
+        + weights.recency * recency_quality
     )
     return ScoredResource(
         resource=candidate.resource,
@@ -202,6 +249,7 @@ def rank(
     mastery: Mapping[uuid.UUID, float],
     difficulty_target: int | None,
     now: datetime,
+    weights: RecommendationWeights = DEFAULT_RECOMMENDATION_WEIGHTS,
 ) -> list[ScoredResource]:
     """Rank candidates against ``gaps``, deterministically.
 
@@ -213,7 +261,9 @@ def rank(
     """
     gap_list = tuple(gaps)
     gap_slugs = frozenset(gap.slug for gap in gap_list)
-    gap_weights = {gap.slug: _gap_weight(mastery.get(gap.concept_id, 0.0)) for gap in gap_list}
+    gap_weights = {
+        gap.slug: _gap_weight(mastery.get(gap.concept_id, 0.0), weights=weights) for gap in gap_list
+    }
     total_weight = sum(gap_weights.values())
     target = difficulty_target if difficulty_target is not None else NEUTRAL_DIFFICULTY_TARGET
     personalised = bool(gap_list)
@@ -227,6 +277,7 @@ def rank(
             difficulty_target=target,
             now=now,
             personalised=personalised,
+            weights=weights,
         )
         for candidate in candidates
     ]
@@ -245,6 +296,7 @@ def rank(
 
 
 __all__ = [
+    "DEFAULT_RECOMMENDATION_WEIGHTS",
     "MIN_GAP_WEIGHT",
     "NEUTRAL_DIFFICULTY_TARGET",
     "NEUTRAL_RATING",
@@ -256,11 +308,13 @@ __all__ = [
     "TRUST_SCORES",
     "UNKNOWN_YEAR_RECENCY",
     "GapSpec",
+    "RecommendationWeights",
     "ScoreContributions",
     "ScoredResource",
     "coverage_for",
     "difficulty_fit_for",
     "rank",
     "recency_quality_for",
+    "recommendation_weights",
     "score_candidate",
 ]

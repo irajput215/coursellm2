@@ -1,15 +1,9 @@
 import { useCallback, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 
-import { apiRequest, errorMessage, isApiError } from '@/api/client'
+import { errorMessage, isApiError } from '@/api/client'
 import { queryKeys } from '@/api/keys'
-import type {
-  AnyCitation,
-  ChatEngine,
-  ConversationDetail,
-  ConversationSummary,
-  ProposedAction,
-} from '@/api/types'
+import type { AnyCitation, ChatEngine, ConversationDetail, ProposedAction } from '@/api/types'
 
 import { streamChat } from './streamChat'
 
@@ -100,10 +94,9 @@ export interface ChatStreamController {
 /**
  * One streaming turn at a time, rendered as it arrives.
  *
- * After a turn completes the persisted assistant message is reconciled from
- * `GET /chat/conversations/{id}`: the SSE contract does not carry `grounded` or
- * `degraded`, and the UI must not invent them. The stream itself drives the
- * visible text; reconciliation only fills in what the stream omits.
+ * The terminal `done` event carries `conversation_id`, `grounded` and
+ * `degraded`, so a completed turn needs no follow-up `GET` to reconcile what the
+ * stream omitted. The stream drives the visible text and the final state.
  */
 export function useChatStream(options: {
   engine: ChatEngine
@@ -127,37 +120,6 @@ export function useChatStream(options: {
     conversationIdRef.current = id
     setConversationId(id)
   }, [])
-
-  const reconcile = useCallback(
-    async (assistantId: string): Promise<void> => {
-      try {
-        const conversations = await queryClient.fetchQuery({
-          queryKey: queryKeys.chat.conversations,
-          queryFn: () => apiRequest<ConversationSummary[]>('/chat/conversations'),
-        })
-        const resolvedId = conversationIdRef.current ?? conversations[0]?.id ?? null
-        if (resolvedId === null) return
-        if (conversationIdRef.current === null) adoptConversationId(resolvedId)
-        const detail = await queryClient.fetchQuery({
-          queryKey: queryKeys.chat.conversation(resolvedId),
-          queryFn: () =>
-            apiRequest<ConversationDetail>(`/chat/conversations/${resolvedId}`),
-        })
-        const lastAssistant = [...detail.messages]
-          .reverse()
-          .find((message) => message.role === 'assistant')
-        if (lastAssistant === undefined) return
-        patchTurn(assistantId, {
-          degraded: lastAssistant.degraded,
-          grounded: lastAssistant.grounded,
-          citations: lastAssistant.citations,
-        })
-      } catch {
-        // The answer is already on screen; reconciliation is best-effort.
-      }
-    },
-    [adoptConversationId, patchTurn, queryClient],
-  )
 
   const runTurn = useCallback(
     async (question: string, replaceTurnId: string | null): Promise<void> => {
@@ -187,7 +149,16 @@ export function useChatStream(options: {
           } else if (event.type === 'citations') {
             patchTurn(assistant.id, { citations: event.citations })
           } else if (event.type === 'done') {
-            patchTurn(assistant.id, { proposedActions: event.proposedActions })
+            // The terminal event carries the turn's identity, grounding and
+            // degradation, so no follow-up GET is needed to finish the turn.
+            if (event.conversationId !== null && conversationIdRef.current === null) {
+              adoptConversationId(event.conversationId)
+            }
+            patchTurn(assistant.id, {
+              proposedActions: event.proposedActions,
+              grounded: event.grounded,
+              degraded: event.degraded,
+            })
           } else {
             patchTurn(assistant.id, {
               status: 'error',
@@ -200,7 +171,6 @@ export function useChatStream(options: {
         }
         patchTurn(assistant.id, { status: 'complete' })
         void queryClient.invalidateQueries({ queryKey: queryKeys.chat.conversations })
-        await reconcile(assistant.id)
       } catch (error) {
         if (isAbort(error)) {
           patchTurn(assistant.id, {
@@ -220,7 +190,7 @@ export function useChatStream(options: {
         setIsStreaming(false)
       }
     },
-    [courseId, engine, patchTurn, queryClient, reconcile],
+    [adoptConversationId, courseId, engine, patchTurn, queryClient],
   )
 
   const send = useCallback(

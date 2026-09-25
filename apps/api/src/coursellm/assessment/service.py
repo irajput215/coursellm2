@@ -36,7 +36,7 @@ from coursellm.assessment.schemas import (
     QuizDraft,
     QuizItem,
 )
-from coursellm.core.config import Settings
+from coursellm.core.config import Settings, get_settings
 from coursellm.core.errors import NotFoundError
 from coursellm.db.models.assessment import Quiz
 from coursellm.db.models.learning import QuizAttempt
@@ -63,9 +63,14 @@ class AttemptPage:
 class AssessmentService:
     """Use cases over quiz drafts, attempts and the progress read model."""
 
-    def __init__(self, session: AsyncSession, scope: TenantScope) -> None:
+    def __init__(
+        self, session: AsyncSession, scope: TenantScope, settings: Settings | None = None
+    ) -> None:
         self._session = session
         self._scope = scope
+        # Optional so tests and scripts can construct the service without one;
+        # production resolves the process settings, which own the tunable weights.
+        self._settings = settings if settings is not None else get_settings()
 
     @property
     def tenant_id(self) -> uuid.UUID:
@@ -196,7 +201,7 @@ class AssessmentService:
         model has exactly one implementation, in ``learning/progress.py``,
         reached through the service that already owns it.
         """
-        return await RoadmapService(self._session, self._scope).progress_overview(
+        return await RoadmapService(self._session, self._scope, self._settings).progress_overview(
             user_id=user_id, course_id=course_id
         )
 

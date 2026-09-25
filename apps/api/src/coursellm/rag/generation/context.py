@@ -51,8 +51,8 @@ class Citation(BaseModel):
     """A citation as displayed and persisted with an answer.
 
     ``quote`` is a short span of the cited passage for the reader's benefit. It
-    is deliberately part of the persisted record but not of the API response
-    schema, which does not publish evidence content.
+    is persisted with the message and returned in the API's citation response, so
+    a reader can check the answer without opening the document.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -112,10 +112,9 @@ class DocumentMeta:
 class ChunkPosition:
     """Where a chunk sits inside its document.
 
-    ``SearchResult`` does not carry the chunk index, so adjacency cannot be
-    inferred from the ranked results alone. The caller that has the session (the
-    chat service) loads these alongside the documents and passes them in; when
-    they are absent the assembler simply does not merge.
+    ``SearchResult`` carries ``chunk_index`` and ``starts_mid_sentence``, so the
+    chat service projects this from the ranked passages it already holds. When a
+    retriever did not populate the index the assembler simply does not merge.
     """
 
     index: int

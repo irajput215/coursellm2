@@ -15,17 +15,43 @@
 # prove they are redacted, so a whole-file or whole-directory exclusion would be
 # too blunt. The pragma is per-line, visible in review, and greppable.
 #
-# Usage:  bash scripts/scan_secrets.sh
-# Exit:   0 = clean, 1 = findings
+# Usage:  bash scripts/scan_secrets.sh [--include-untracked]
+# Exit:   0 = clean, 1 = findings, 2 = usage error
+#
+# ``--include-untracked`` also scans files Git is not tracking yet (respecting
+# ``.gitignore``). The default mode is deliberately narrower because CI scans a
+# checkout; pre-commit passes the flag so a new file is covered before it is
+# ever committed, which is exactly when a credential is most likely to appear.
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+INCLUDE_UNTRACKED=0
+for arg in "$@"; do
+  case "$arg" in
+    --include-untracked) INCLUDE_UNTRACKED=1 ;;
+    *)
+      echo "usage: bash scripts/scan_secrets.sh [--include-untracked]" >&2
+      exit 2
+      ;;
+  esac
+done
+
 # Documentation legitimately quotes secret-shaped examples in prose.
 EXCLUDE_REGEX='^(docs/|.*\.md$|\.env\.example$)'
 
 PRAGMA='secret-scan: allow'
+
+list_files() {
+  if [[ "$INCLUDE_UNTRACKED" -eq 1 ]]; then
+    # NUL-delimited and de-duplicated: a path can be both tracked and modified,
+    # and a filename may contain spaces.
+    { git ls-files -z; git ls-files -z --others --exclude-standard; } | sort -zu
+  else
+    git ls-files -z
+  fi
+}
 
 # Each entry is "human-label|extended-regex".
 PATTERNS=(
@@ -64,7 +90,7 @@ while IFS= read -r -d '' file; do
       report "$file" "$lineno" "$label"
     done < <(grep -nIE -- "$regex" "$file" 2>/dev/null || true)
   done
-done < <(git ls-files -z)
+done < <(list_files)
 
 # Paths that must never be tracked, regardless of content.
 FORBIDDEN_NAMES=(
@@ -78,14 +104,14 @@ FORBIDDEN_NAMES=(
   '\.tfvars$'
 )
 
-while IFS= read -r file; do
+while IFS= read -r -d '' file; do
   for pattern in "${FORBIDDEN_NAMES[@]}"; do
     if [[ "$file" =~ $pattern ]]; then
       printf '\033[31mFORBIDDEN FILE\033[0m %s must not be committed\n' "$file"
       found=1
     fi
   done
-done < <(git ls-files)
+done < <(list_files)
 
 if [[ "$found" -ne 0 ]]; then
   echo

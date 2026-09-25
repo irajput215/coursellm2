@@ -198,14 +198,19 @@ existing `exclude_lines` patterns), deliberately deferred with a reason, or a
 module that should be measured because someone will edit it. Adding a pragma to
 make a number move is the failure mode this document is written to avoid.
 
-## Known defect recorded by a failing-by-design test
+## Defect that was recorded by a failing-by-design test (now closed)
 
 `tests/integration/test_transaction_boundaries.py::TestAFailedTurnStillRecordsTheQuestion::test_the_user_message_survives_a_hard_generation_failure`
-is `xfail(strict=True)`.
+was `xfail(strict=True)` while `services/agent.py::run_turn` staged the user message
+inside the request's single transaction: an unhandled graph failure rolled the question
+back with the answer.
 
-`services/agent.py::run_turn` stages the user message and then invokes the graph
-inside the request's single transaction. An unhandled graph failure rolls the
-question back with the answer, so the user's transcript loses a question that
-was asked. The fix is a commit boundary for the user message before generation —
-a source change outside this PR's sanctioned edit set. `strict=True` means the
-moment the fix lands the test `XPASS`es and the marker must be removed.
+The defect is fixed in PR 23. `services/chat.py::commit_turn` commits the user message
+before generation, and `db/tenancy.py::tenant_session` now owns commit/rollback
+explicitly so a mid-request commit is possible at all (SQLAlchemy refuses further
+statements once a transaction owned by a `session.begin()` context manager has been
+committed). `commit_turn` re-applies the tenant GUC after each commit, because
+`set_config(..., is_local => true)` is transaction-scoped.
+
+The `xfail` marker was removed with the fix, as the strict marker required, and the
+test passes.

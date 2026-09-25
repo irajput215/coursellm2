@@ -11,11 +11,10 @@ incidentally:
   silently wrong. The test is table-driven so adding a retrieval setting to
   ``Settings`` without adding it to the hash is a visible omission rather than a
   quiet one.
-* **Redaction reaches into containers, or it does not.** ``redact_event``
-  scrubs a top-level string value and replaces a top-level sensitive *field*.
-  A credential nested in a list or a nested mapping is currently emitted
-  verbatim. That is a real gap in a control, so it is asserted explicitly with a
-  documented marker rather than left to be discovered.
+* **Redaction reaches into containers.** ``redact_event`` walks lists and nested
+  mappings, replacing a sensitive *field name* and scrubbing a credential-shaped
+  value at every level, so a key hidden under ``messages`` or ``tool_results``
+  cannot be emitted verbatim.
 * **Middleware rejects before it buffers, and never trusts a client header.**
   The body-size guard must fire before the handler is constructed, and an
   absurd ``X-Request-ID`` must be replaced by a server-generated one.
@@ -70,6 +69,7 @@ _RETRIEVAL_AFFECTING: dict[str, dict[str, object]] = {
     "rerank_enabled": {"rerank_enabled": False},
     "reranker_model": {"reranker_model": "BAAI/bge-reranker-large"},
     "rerank_top_k": {"rerank_top_k": 6},
+    "rerank_min_score": {"rerank_min_score": 0.5},
     "context_token_budget": {"context_token_budget": 3001},
     "metadata_filtering_enabled": {"metadata_filtering_enabled": False},
 }
@@ -143,20 +143,17 @@ class TestRetrievalConfigVersionCoversEveryRetrievalSetting:
             graph_max_steps=3, agent_max_tool_calls_per_turn=2
         ).retrieval_config_version == (base)
 
-    def test_rerank_min_score_is_not_in_the_hash_today(self) -> None:
-        """A live discrepancy, asserted rather than hidden.
+    def test_rerank_min_score_is_in_the_hash(self) -> None:
+        """The floor drops weak passages, so it must move the version.
 
-        ``rerank_min_score`` *does* change retrieval results: it is the floor that
-        drops weak passages (``rag/rerank/pipeline.py``), so a cached retrieval
-        produced under one floor is not the same result as one produced under
-        another. It is nonetheless absent from the payload. This test records the
-        current state so the gap is visible in the suite; the fix is to add
-        ``"rerank_min_score": self.rerank_min_score`` to the payload, at which
-        point this assertion flips and must be replaced with the natural
-        "changing it changes the version" case above.
+        ``rerank_min_score`` changes the result set the same way ``rerank_top_k``
+        does; a cached retrieval produced under one floor is not the same result
+        as one produced under another. It is covered by the parameterised case
+        above; this test names the specific regression so its intent survives the
+        table being reordered.
         """
         base = _settings().retrieval_config_version
-        assert _settings(rerank_min_score=0.5).retrieval_config_version == base
+        assert _settings(rerank_min_score=0.5).retrieval_config_version != base
 
     def test_rerank_operational_knobs_are_not_in_the_hash(self) -> None:
         """Timeout and batch size change *latency*, not which passages survive.
@@ -174,40 +171,36 @@ class TestRetrievalConfigVersionCoversEveryRetrievalSetting:
 # Log redaction inside containers
 # ---------------------------------------------------------------------------
 class TestRedactionReachesIntoContainers:
-    """The gap, stated positively: containers are not walked today.
+    """The control, stated positively: containers are walked.
 
-    ``redact_event`` inspects only the top-level keys of an event. A provider key
-    inside a list or a nested mapping — exactly the shape of ``messages``,
-    ``tool_results`` or an upstream error payload — is therefore emitted
-    verbatim. Every test below asserts the *current* behaviour so the gap is
-    documented and a future recursive implementation has a failing test to flip,
-    rather than claiming a control that does not exist.
+    ``redact_event`` inspects keys and values at every level of the event. A
+    provider key inside a list or a nested mapping — exactly the shape of
+    ``messages``, ``tool_results`` or an upstream error payload — is scrubbed
+    just as it would be at the top level.
     """
 
-    def test_a_secret_nested_in_a_list_is_not_redacted(self) -> None:
+    def test_a_secret_nested_in_a_list_is_redacted(self) -> None:
         event = _redact({"upstream": {"errors": [f"invalid key {_OPENAI_SHAPED}"]}})
-        assert _OPENAI_SHAPED in repr(event), (
-            "redaction now recurses into lists; flip this assertion and update "
-            "the gap note in tests/COVERAGE.md"
-        )
+        assert _OPENAI_SHAPED not in repr(event)
+        assert "[redacted]" in repr(event)
 
-    def test_a_secret_nested_in_a_dict_is_not_redacted(self) -> None:
+    def test_a_secret_nested_in_a_dict_is_redacted(self) -> None:
         event = _redact({"request": {"headers": {"x-api-key": _OPENAI_SHAPED}}})
-        assert _OPENAI_SHAPED in repr(event)
+        assert _OPENAI_SHAPED not in repr(event)
 
-    def test_a_sensitive_field_name_nested_in_a_dict_is_not_redacted(self) -> None:
+    def test_a_sensitive_field_name_nested_in_a_dict_is_redacted(self) -> None:
         event = _redact({"payload": {"password": "hunter" + "2"}})
-        assert event["payload"]["password"] != "[redacted]"
+        assert event["payload"]["password"] == "[redacted]"
 
-    def test_the_same_value_is_redacted_at_the_top_level(self) -> None:
-        """The positive control that makes the gap above a gap, not a mistake.
+    def test_a_sensitive_field_name_inside_a_list_item_is_redacted(self) -> None:
+        """A list of tool results is the shape that used to leak verbatim."""
+        event = _redact({"tool_results": [{"api_key": _OPENAI_SHAPED}, {"ok": True}]})
+        assert event["tool_results"][0]["api_key"] == "[redacted]"
 
-        One field name and one value shape, two positions: the top level is
-        scrubbed, the container is not. That contrast is the finding.
-        """
+    def test_the_same_value_is_redacted_at_every_level(self) -> None:
         event = _redact({"detail": f"used {_OPENAI_SHAPED}", "payload": {"detail": _OPENAI_SHAPED}})
         assert _OPENAI_SHAPED not in event["detail"]
-        assert event["payload"]["detail"] == _OPENAI_SHAPED
+        assert _OPENAI_SHAPED not in event["payload"]["detail"]
 
 
 # ---------------------------------------------------------------------------

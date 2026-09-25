@@ -50,6 +50,9 @@ from coursellm.graph.repository import (
 )
 from coursellm.learning.progress import (
     DEFAULT_MASTERY_THRESHOLD,
+    DEFAULT_MASTERY_WEIGHTS,
+    MasteryWeights,
+    mastery_weights,
     project_mastery,
 )
 from coursellm.learning.schemas import (
@@ -363,6 +366,7 @@ async def load_mastery(
     scope: TenantScope,
     *,
     user_id: uuid.UUID,
+    weights: MasteryWeights = DEFAULT_MASTERY_WEIGHTS,
 ) -> dict[uuid.UUID, float]:
     """Project the student's mastery from their append-only evidence.
 
@@ -380,22 +384,19 @@ async def load_mastery(
     )
     events = list((await session.execute(event_stmt)).scalars().all())
     attempts = list((await session.execute(attempt_stmt)).scalars().all())
-    return project_mastery(events, attempts)
+    return project_mastery(events, attempts, weights=weights)
 
 
 async def _concept_descriptions(
     repo: ConceptGraphRepository, concept_ids: Sequence[uuid.UUID]
 ) -> dict[uuid.UUID, str]:
-    """Fetch the concept's own description for steps the model did not describe.
+    """Fetch each concept's own description for steps the model did not describe.
 
-    One read per concept, bounded by the closure size. A bulk accessor would be a
-    reasonable optimisation, but a roadmap is tens of steps and the extra method
-    would widen the repository's surface for no correctness gain.
+    One bulk read rather than one ``get`` per roadmap step.
     """
     descriptions: dict[uuid.UUID, str] = {}
-    for concept_id in concept_ids:
-        concept = await repo.get(concept_id)
-        if concept is not None and concept.description:
+    for concept_id, concept in (await repo.get_many(concept_ids)).items():
+        if concept.description:
             descriptions[concept_id] = concept.description
     return descriptions
 
@@ -526,7 +527,7 @@ async def build_roadmap(
     projected: dict[uuid.UUID, float] = (
         dict(mastery)
         if mastery is not None
-        else await load_mastery(session, scope, user_id=user_id)
+        else await load_mastery(session, scope, user_id=user_id, weights=mastery_weights(settings))
     )
     closure = await repo.prerequisite_closure(
         goal.id,

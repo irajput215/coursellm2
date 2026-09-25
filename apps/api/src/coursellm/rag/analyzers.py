@@ -257,17 +257,16 @@ def tokenize_for_index(text: str) -> list[str]:
 
 
 def normalize_query(text: str) -> list[str]:
-    """Query-time analysis, kept symmetrical with :func:`tokenize_for_index`.
+    """Query-time analysis: identical to :func:`tokenize_for_index`.
 
-    The only difference from the index path is the fallback: if removing
-    stopwords empties the query — "how do i" is the canonical example — the
-    unfiltered tokens are returned instead. A stopword-only query then still
-    retrieves *something* rather than matching an empty term set and returning
-    nothing, which would look like a bug to the user.
+    The two paths are deliberately the same function of the text, including the
+    stopword removal. An earlier version fell back to the unfiltered tokens for
+    a stopword-only query, which made the query analyser *different* from the
+    index analyser and forced every caller to re-filter. A stopword-only query
+    now yields no terms, and the lexical retriever reports that honestly as
+    ``empty_query_terms`` rather than searching for terms the index cannot hold.
     """
-    tokens = tokenize(text)
-    filtered = [token for token in tokens if token not in STOPWORDS]
-    return filtered or tokens
+    return tokenize_for_index(text)
 
 
 def term_frequencies(tokens: Iterable[str]) -> dict[str, int]:

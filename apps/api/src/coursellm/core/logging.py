@@ -76,16 +76,51 @@ def _scrub_text(value: str) -> str:
     return value
 
 
+#: Bound on how deep redaction walks a payload. An event is expected to be a
+#: shallow, JSON-shaped dict; the cap keeps a self-referential or pathologically
+#: deep structure from costing more than the log line is worth.
+_MAX_REDACTION_DEPTH = 12
+
+
+def _redact_value(value: Any, depth: int) -> Any:
+    """Scrub one value, recursing into dicts and lists.
+
+    A credential is exactly as dangerous nested under ``tool_results`` or inside
+    a list of ``messages`` as it is at the top level, so field-name matching and
+    value scrubbing both apply at every level.
+    """
+    if depth >= _MAX_REDACTION_DEPTH:
+        return _scrub_text(value) if isinstance(value, str) else value
+    if isinstance(value, str):
+        return _scrub_text(value)
+    if isinstance(value, dict):
+        return {
+            key: (
+                _REDACTION_PLACEHOLDER
+                if isinstance(key, str) and key.lower() in _REDACTED_FIELDS
+                else _redact_value(item, depth + 1)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return type(value)(_redact_value(item, depth + 1) for item in value)
+    return value
+
+
 def redact_event(
     _logger: Any, _method: str, event_dict: MutableMapping[str, Any]
 ) -> MutableMapping[str, Any]:
-    """structlog processor: drop or scrub sensitive values from every event."""
+    """structlog processor: drop or scrub sensitive values from every event.
+
+    The walk is recursive: a sensitive *field name* anywhere in the payload is
+    replaced, and a credential-shaped value inside any nested string is
+    scrubbed. The top-level mapping is updated in place (structlog's contract).
+    """
     for key in list(event_dict):
-        lowered = key.lower()
-        if lowered in _REDACTED_FIELDS:
+        if isinstance(key, str) and key.lower() in _REDACTED_FIELDS:
             event_dict[key] = _REDACTION_PLACEHOLDER
-        elif isinstance(event_dict[key], str):
-            event_dict[key] = _scrub_text(event_dict[key])
+        else:
+            event_dict[key] = _redact_value(event_dict[key], depth=0)
     return event_dict
 
 

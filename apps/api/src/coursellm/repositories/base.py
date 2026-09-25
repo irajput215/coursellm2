@@ -72,6 +72,22 @@ class TenantRepository[ModelT: Base]:
             raise NotFoundError(f"{self.model.__name__} not found.")
         return entity
 
+    async def get_many(self, entity_ids: Sequence[uuid.UUID]) -> dict[uuid.UUID, ModelT]:
+        """Fetch many rows by id in one statement, keyed by id.
+
+        A bulk accessor rather than ``get`` in a loop: a caller that needs N rows
+        should issue one query. Ids that do not resolve — including another
+        tenant's — are simply absent, the same non-disclosure rule as ``get``.
+        Duplicate ids are collapsed.
+        """
+        unique_ids = list(dict.fromkeys(entity_ids))
+        if not unique_ids:
+            return {}
+        result = await self._session.execute(
+            self._select().where(self.model.id.in_(unique_ids))  # type: ignore[attr-defined]
+        )
+        return {entity.id: entity for entity in result.scalars().all()}  # type: ignore[attr-defined]
+
     async def list_all(self, *, limit: int = 100, offset: int = 0) -> Sequence[ModelT]:
         result = await self._session.execute(self._select().limit(limit).offset(offset))
         return result.scalars().all()

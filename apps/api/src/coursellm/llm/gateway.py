@@ -24,15 +24,15 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import secrets
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Protocol
 
-import litellm
-from litellm import exceptions as litellm_exceptions
 from pydantic import ValidationError as PydanticValidationError
 
 from coursellm.core.config import Settings
@@ -65,6 +65,35 @@ from coursellm.observability.attributes import (
     GEN_AI_USAGE_OUTPUT_TOKENS,
     SPAN_LLM_CALL,
 )
+
+
+@contextmanager
+def _pristine_environment() -> Any:
+    """Run a block without letting it rewrite ``os.environ``.
+
+    ``litellm`` calls ``load_dotenv()`` at import time whenever
+    ``LITELLM_MODE`` is not ``PROD`` (its default), so importing it makes a
+    developer's ``.env`` visible to the entire process. That is a
+    supply-chain-adjacent smell and it had a concrete symptom: an integration
+    test that constructs ``Settings(_env_file=None)`` still saw ``DEBUG=true``
+    and failed on machines with a ``.env`` while passing in CI. Snapshotting and
+    restoring the environment around the import contains it; the credentials the
+    gateway actually needs are published explicitly from :class:`Settings` in
+    ``LiteLLMGateway.__init__``.
+    """
+    before = dict(os.environ)
+    try:
+        yield
+    finally:
+        os.environ.clear()
+        os.environ.update(before)
+
+
+# Isolated because of ``load_dotenv``; see ``_pristine_environment``.
+with _pristine_environment():
+    import litellm
+    from litellm import exceptions as litellm_exceptions
+
 
 logger = get_logger(__name__)
 
@@ -199,6 +228,32 @@ def _chunk_text(chunk: Any) -> str:
     return getattr(delta, "content", "") or ""
 
 
+#: Provider credential environment variables litellm reads at call time. The
+#: application's source of truth is :class:`Settings`; this is the only place a
+#: value is copied into the process environment, and only these four names.
+_PROVIDER_KEY_VARS = (
+    ("OPENAI_API_KEY", "openai_api_key"),
+    ("ANTHROPIC_API_KEY", "anthropic_api_key"),
+    ("GEMINI_API_KEY", "gemini_api_key"),
+    ("GROQ_API_KEY", "groq_api_key"),
+)
+
+
+def publish_provider_keys(settings: Settings) -> None:
+    """Expose the configured provider credentials to litellm.
+
+    ``litellm`` resolves API keys from ``os.environ`` when it is not given an
+    explicit ``api_key``. The gateway publishes exactly the four keys it knows
+    about from :class:`Settings`, instead of relying on litellm's import-time
+    ``load_dotenv()`` — which would also leak unrelated variables such as
+    ``DEBUG`` into a process that deliberately bypassed its ``.env``.
+    """
+    for variable, attribute in _PROVIDER_KEY_VARS:
+        value = getattr(settings, attribute, "")
+        if value:
+            os.environ[variable] = value
+
+
 class LiteLLMGateway:
     """The production gateway. All provider access goes through LiteLLM."""
 
@@ -212,6 +267,7 @@ class LiteLLMGateway:
         self._settings = settings
         self._session_factory = session_factory
         self._sleep: SleepFn = sleep or asyncio.sleep
+        publish_provider_keys(settings)
 
     # -- public API ------------------------------------------------------
     async def complete(self, request: LLMRequest) -> LLMResponse:

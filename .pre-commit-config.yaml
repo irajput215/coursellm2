@@ -46,8 +46,11 @@ repos:
     hooks:
       - id: secrets-scan
         name: repository secret scan
-        description: fail if a secret-shaped value is present in a tracked file
-        entry: bash scripts/scan_secrets.sh
+        description: fail if a secret-shaped value is present in a tracked or newly added file
+        # `--include-untracked` is what makes this cover the file you are about to
+        # add. The scanner itself defaults to tracked files so CI stays a scan of
+        # the checkout; pre-commit opts into the wider surface explicitly.
+        entry: bash scripts/scan_secrets.sh --include-untracked
         language: system
         pass_filenames: false
         always_run: true

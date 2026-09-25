@@ -21,6 +21,11 @@ export interface ChatCitationsEvent {
 export interface ChatDoneEvent {
   type: 'done'
   proposedActions: ProposedAction[]
+  /** The turn's conversation, so the client need not re-list conversations. */
+  conversationId: string | null
+  /** Grounding and degradation, carried on the terminal event. */
+  grounded: boolean | null
+  degraded: string[]
 }
 
 export interface ChatErrorEvent {
@@ -69,6 +74,24 @@ function readProposedActions(payload: unknown): ProposedAction[] {
   )
 }
 
+function readDone(payload: unknown): Omit<ChatDoneEvent, 'type'> {
+  const record =
+    typeof payload === 'object' && payload !== null
+      ? (payload as { proposed_actions?: unknown; conversation_id?: unknown; grounded?: unknown; degraded?: unknown })
+      : {}
+  const conversationId = typeof record.conversation_id === 'string' ? record.conversation_id : null
+  const grounded = typeof record.grounded === 'boolean' ? record.grounded : null
+  const degraded = Array.isArray(record.degraded)
+    ? record.degraded.filter((reason): reason is string => typeof reason === 'string')
+    : []
+  return {
+    proposedActions: readProposedActions(payload),
+    conversationId,
+    grounded,
+    degraded,
+  }
+}
+
 export async function* streamChat(input: StreamChatInput): AsyncGenerator<ChatStreamEvent> {
   const body = {
     question: input.question,
@@ -98,7 +121,7 @@ export async function* streamChat(input: StreamChatInput): AsyncGenerator<ChatSt
     } else if (event.event === 'citations') {
       yield { type: 'citations', citations: readCitations(payload) }
     } else if (event.event === 'done') {
-      yield { type: 'done', proposedActions: readProposedActions(payload) }
+      yield { type: 'done', ...readDone(payload) }
     } else if (event.event === 'error') {
       const detail =
         typeof payload === 'object' && payload !== null && 'detail' in payload

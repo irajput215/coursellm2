@@ -165,6 +165,11 @@ class ConfigSnapshot(BaseModel):
     bm25_b: float
     hnsw_ef_search: int
     context_token_budget: int
+    # Both are inputs to ``retrieval_config_version``. Omitting them meant a
+    # reader could see the hash without being able to see two of the settings
+    # that produce it, which defeats the point of recording it.
+    rerank_min_score: float
+    metadata_filtering_enabled: bool
     chunk_size_tokens: int
     chunk_overlap_tokens: int
     min_chunk_tokens: int
@@ -412,6 +417,8 @@ def config_snapshot(settings: Settings) -> ConfigSnapshot:
         bm25_b=settings.bm25_b,
         hnsw_ef_search=settings.hnsw_ef_search,
         context_token_budget=settings.context_token_budget,
+        rerank_min_score=settings.rerank_min_score,
+        metadata_filtering_enabled=settings.metadata_filtering_enabled,
         chunk_size_tokens=settings.chunk_size_tokens,
         chunk_overlap_tokens=settings.chunk_overlap_tokens,
         min_chunk_tokens=settings.min_chunk_tokens,

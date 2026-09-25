@@ -76,9 +76,15 @@ class TestStopwordsAndQuerySymmetry:
         text = "the HNSW index uses ef_construction for recall"
         assert normalize_query(text) == tokenize_for_index(text)
 
-    def test_stopword_only_query_still_returns_terms(self) -> None:
-        assert normalize_query("the and of") == ["the", "and", "of"]
-        assert normalize_query("the and of") != []
+    def test_stopword_only_query_has_no_terms(self) -> None:
+        """Query and index analysis are the same function, including stopwords.
+
+        The old behaviour (returning the unfiltered tokens) made the query
+        analyser differ from the index analyser; callers had to re-filter, and a
+        stopword-only query searched for terms ``chunk_terms`` cannot contain.
+        """
+        assert normalize_query("the and of") == []
+        assert normalize_query("the and of") == tokenize_for_index("the and of")
 
     def test_normalize_query_keeps_identifiers(self) -> None:
         assert normalize_query("what is ef_construction?") == ["ef_construction"]

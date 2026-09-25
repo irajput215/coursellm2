@@ -75,6 +75,11 @@ class SearchResult:
     rank: int
     score: float
     retriever: Literal["semantic", "lexical"]
+    #: Position of the chunk inside its document, and whether it begins
+    #: mid-sentence. Carried on the result so the context assembler can merge
+    #: adjacent chunks into continuous prose without a second query.
+    chunk_index: int | None = None
+    starts_mid_sentence: bool = False
 
 
 @dataclass(frozen=True, slots=True)

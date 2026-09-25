@@ -41,7 +41,11 @@ from coursellm.db.models.resource import Resource
 from coursellm.db.tenancy import TenantScope
 from coursellm.graph.repository import ConceptGraphRepository
 from coursellm.learning.planner import load_mastery
-from coursellm.learning.progress import DEFAULT_MASTERY_THRESHOLD, weak_concepts
+from coursellm.learning.progress import (
+    DEFAULT_MASTERY_THRESHOLD,
+    mastery_weights,
+    weak_concepts,
+)
 from coursellm.recommend.catalogue import ResourceCandidate, ResourceCatalogue
 from coursellm.recommend.explanation import explain
 from coursellm.recommend.ranking import (
@@ -49,6 +53,7 @@ from coursellm.recommend.ranking import (
     GapSpec,
     ScoredResource,
     rank,
+    recommendation_weights,
 )
 from coursellm.recommend.schemas import (
     MAX_DIFFICULTY,
@@ -282,7 +287,7 @@ async def recommend_for_user(
     """
     now = datetime.now(UTC)
     degraded: list[str] = []
-    mastery = await load_mastery(session, scope, user_id=user_id)
+    mastery = await load_mastery(session, scope, user_id=user_id, weights=mastery_weights(settings))
     gaps = await _resolve_gaps(
         session,
         scope,
@@ -325,6 +330,7 @@ async def recommend_for_user(
         mastery=mastery,
         difficulty_target=target,
         now=now,
+        weights=recommendation_weights(settings),
     )
     selected = scored[: max(limit, 0)]
 

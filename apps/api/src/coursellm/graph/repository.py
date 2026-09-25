@@ -27,7 +27,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import RowMapping, case, func, select, text
+from sqlalchemy import RowMapping, case, func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from coursellm.core.errors import CourseLLMError, NotFoundError, ValidationError
@@ -618,6 +618,52 @@ class ConceptGraphRepository(TenantRepository[Concept]):
             stmt = stmt.order_by(Concept.created_at).limit(1)
         result = await self._session.execute(stmt)
         return result.scalars().first()
+
+    async def concepts_for_course(self, course_id: uuid.UUID, *, limit: int = 100) -> list[Concept]:
+        """The tenant's concepts for one course, cheapest-first.
+
+        The deterministic ``(difficulty, name)`` order is part of the contract:
+        quiz generation samples this list, and an unstable order would make the
+        same request produce different items.
+        """
+        stmt = (
+            self._select()
+            .where(Concept.course_id == course_id)
+            .order_by(Concept.difficulty, Concept.name)
+            .limit(limit)
+        )
+        return list((await self._session.execute(stmt)).scalars().all())
+
+    async def provenance_edges_for(
+        self,
+        *,
+        chunk_ids: Sequence[uuid.UUID],
+        document_ids: Sequence[uuid.UUID],
+    ) -> list[tuple[uuid.UUID, uuid.UUID, uuid.UUID | None, uuid.UUID | None]]:
+        """Edges whose recorded provenance mentions one of the given chunks or documents.
+
+        A bulk accessor: the caller assembles a whole result set and must not
+        issue one edge query per passage. Returns plain tuples rather than ORM
+        rows because only these four columns are ever read.
+        """
+        if not chunk_ids and not document_ids:
+            return []
+        stmt = select(
+            ConceptEdge.source_concept_id,
+            ConceptEdge.target_concept_id,
+            ConceptEdge.provenance_chunk_id,
+            ConceptEdge.provenance_document_id,
+        ).where(
+            ConceptEdge.tenant_id == self.tenant_id,
+            or_(
+                ConceptEdge.provenance_chunk_id.in_(chunk_ids),
+                ConceptEdge.provenance_document_id.in_(document_ids),
+            ),
+        )
+        return [
+            (source, target, chunk_id, document_id)
+            for source, target, chunk_id, document_id in (await self._session.execute(stmt)).all()
+        ]
 
     async def resolve_concept(
         self,

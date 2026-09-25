@@ -245,23 +245,25 @@ Two traps when reproducing:
 
 ## 7. Current counts
 
-Measured on 2026-09-25 on `feat/18-tests-coverage`:
+Measured on 2026-09-25 on `feat/23-hardening`:
 
 | Tier | Tests | Notes |
 |------|------:|-------|
-| `unit` | **1264** (1216 before this PR) | `tests/unit/test_core_edges.py` adds 48; `tests/unit/test_config.py` and `test_logging.py` are unchanged |
-| `security` | **144** (129 before) | `tests/security/test_hardening.py` adds 15 |
-| `integration` | **164** (151 before) | `test_transaction_boundaries.py` adds 8 (1 `xfail`), `test_concurrency.py` adds 5 |
-| **selected by `make test-coverage`** | **1572** | 1571 pass, 1 `xfail` — a named defect, not a flake; see COVERAGE.md |
+| `unit` | **1277** | `test_core_edges.py` gains recursive-redaction and `rerank_min_score` cases; `test_citations.py` gains the quote-bound cases; `test_config.py` gains weight-set validation |
+| `security` | **144** | unchanged from PR 18 |
+| `integration` | **164** | no `xfail`: the failed-turn transaction defect is fixed and the marker removed |
+| **selected by `make test-coverage`** | **1585** | 1585 pass; zero `xfail` |
 
-Coverage: 86.1 % of statements, 66.9 % of branches, 82.99 % weighted, against a
-`fail_under` of 82. The per-package table and the named uncovered functions are
-in [`apps/api/tests/COVERAGE.md`](../apps/api/tests/COVERAGE.md).
+The coverage figures in [`apps/api/tests/COVERAGE.md`](../apps/api/tests/COVERAGE.md)
+were measured in PR 18 and were **not re-measured** in this hardening pass; the gate's
+`fail_under` of 82 is unchanged and `make verify` does not run coverage. That file also
+names the per-package numbers and the covered-by-structure exceptions.
 
-`make verify` (the full gate) on 2026-09-24T23:11:23Z–23:15:44Z: format clean
-(260 files), lint clean, mypy clean (144 + 11 source files), secret scan clean,
-`unit` 1264 passed, `security` 144 passed, `integration` 163 passed + 1 `xfail`,
-eval gate "no regressions", exit 0.
+`make verify` (the full gate) runs format, lint, typecheck, secret scan, unit,
+security, integration and the eval gate, in that order. The per-tier results for
+this pass are in [`docs/FINAL_AUDIT.md`](FINAL_AUDIT.md) and the PR report:
+unit 1277 passed, security 144 passed, integration 164 passed, eval gate
+"no regressions".
 
 ## 8. Where the guarantees live
 

@@ -6,18 +6,16 @@ exist in ``resources`` and must cover at least one reported gap. That is the
 regression guard for the hard rule of this PR — a fabricated or unrelated
 recommendation fails here.
 
-``resources`` and ``resource_concepts`` are global, so the shared integration
-fixture does not truncate them. This module truncates them itself, through the
-owner engine, before and after every test.
+``resources`` and ``resource_concepts`` are global, so they are truncated by the
+shared ``clean_db`` fixture (from ``GLOBAL_TABLES``) rather than by a fixture of
+this module.
 """
 
 from __future__ import annotations
 
 import uuid
-from collections.abc import AsyncIterator
 
 import pytest
-import pytest_asyncio
 from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -61,21 +59,6 @@ ML_DIFFICULTY = {
 
 #: A DAG whose slugs are deliberately absent from the catalogue.
 UNCOVERED_DAG: tuple[str, ...] = ("quantum-chemistry", "molecular-orbital-theory")
-
-
-@pytest_asyncio.fixture(loop_scope="function", autouse=True)
-async def clean_catalogue(owner_engine: AsyncEngine) -> AsyncIterator[None]:
-    """Truncate the global catalogue around each test.
-
-    The shared ``clean_db`` fixture truncates tenants and tenant-scoped tables
-    only; the catalogue is global by design, so this module owns its cleanup.
-    """
-    statement = "TRUNCATE TABLE resource_concepts, resources RESTART IDENTITY CASCADE"
-    async with owner_engine.begin() as connection:
-        await connection.execute(text(statement))
-    yield
-    async with owner_engine.begin() as connection:
-        await connection.execute(text(statement))
 
 
 # ---------------------------------------------------------------------------

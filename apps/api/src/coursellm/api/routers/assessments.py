@@ -19,10 +19,10 @@ from typing import Annotated
 from fastapi import APIRouter, Query, status
 
 from coursellm.api.deps import (
+    AssessmentServiceDep,
     ContextDep,
     LLMGatewayDep,
     SettingsDep,
-    TenantSessionDep,
 )
 from coursellm.api.schemas.assessment import (
     AnswerSubmitRequest,
@@ -36,7 +36,6 @@ from coursellm.api.schemas.assessment import (
     quiz_response,
 )
 from coursellm.api.schemas.roadmap import NextActionResponse, RoadmapPositionResponse
-from coursellm.assessment.service import AssessmentService
 from coursellm.db.models.learning import QuizAttempt
 
 router = APIRouter(prefix="/quizzes", tags=["assessments"])
@@ -62,11 +61,11 @@ def _attempt_response(attempt: QuizAttempt) -> AttemptResponse:
 async def create_quiz(
     payload: QuizCreateRequest,
     context: ContextDep,
-    session: TenantSessionDep,
+    assessment_service: AssessmentServiceDep,
     settings: SettingsDep,
     gateway: LLMGatewayDep,
 ) -> QuizResponse:
-    service = AssessmentService(session, context)
+    service = assessment_service
     draft = await service.generate(
         user_id=context.user_id,
         settings=settings,
@@ -93,9 +92,9 @@ async def create_quiz(
 async def get_quiz(
     quiz_id: uuid.UUID,
     context: ContextDep,
-    session: TenantSessionDep,
+    assessment_service: AssessmentServiceDep,
 ) -> QuizResponse:
-    service = AssessmentService(session, context)
+    service = assessment_service
     draft = await service.get_quiz(quiz_id=quiz_id, user_id=context.user_id)
     return quiz_response(draft)
 
@@ -116,11 +115,11 @@ async def submit_answer(
     item_id: str,
     payload: AnswerSubmitRequest,
     context: ContextDep,
-    session: TenantSessionDep,
+    assessment_service: AssessmentServiceDep,
     settings: SettingsDep,
     gateway: LLMGatewayDep,
 ) -> AssessmentResultResponse:
-    service = AssessmentService(session, context)
+    service = assessment_service
     result = await service.submit_answer(
         quiz_id=quiz_id,
         item_id=item_id,
@@ -144,10 +143,10 @@ async def submit_answer(
 )
 async def get_progress_summary(
     context: ContextDep,
-    session: TenantSessionDep,
+    assessment_service: AssessmentServiceDep,
     course_id: Annotated[uuid.UUID | None, Query()] = None,
 ) -> ProgressSummaryResponse:
-    service = AssessmentService(session, context)
+    service = assessment_service
     overview = await service.progress_summary(user_id=context.user_id, course_id=course_id)
     recent = await service.recent_attempts(user_id=context.user_id)
     return ProgressSummaryResponse(
@@ -179,11 +178,11 @@ async def get_progress_summary(
 )
 async def list_attempts(
     context: ContextDep,
-    session: TenantSessionDep,
+    assessment_service: AssessmentServiceDep,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> AttemptPageResponse:
-    service = AssessmentService(session, context)
+    service = assessment_service
     page = await service.attempt_page(user_id=context.user_id, limit=limit, offset=offset)
     return AttemptPageResponse(
         items=[_attempt_response(attempt) for attempt in page.attempts],

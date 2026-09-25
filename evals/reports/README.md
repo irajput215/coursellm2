@@ -47,7 +47,7 @@ DATABASE_URL="postgresql+asyncpg://coursellm_app@localhost:5432/coursellm_dev" \
 | dataset SHA-256 | `309c4d5ceb285841802bec910dd916acfa32ec59403958e870c85cacbb49b5e7` |
 | `corpus` | 8 documents, 14 chunks |
 | corpus SHA-256 | `b072f18351ece319b9a4e8c3d516b609745c9178b946b51b2455af8a58090b72` |
-| `config.retrieval_config_version` | `4e535f72cb58` |
+| `config.retrieval_config_version` | `8f3641b0eafb` |
 | embedding provider / model | `hashing` / `hashing-v1`, dim 384 |
 | reranker | `lexical-fallback` (`LexicalReranker`) |
 | `retrieval_top_k_per_retriever` / `rrf_k` | 20 / 60 |
@@ -57,6 +57,12 @@ DATABASE_URL="postgresql+asyncpg://coursellm_app@localhost:5432/coursellm_dev" \
 | database | PostgreSQL 18.4 (`coursellm_dev`), connected as the RLS-enforcing `coursellm_app` role |
 | machine | `Ishus-MacBook-Air.local`, macOS 26.5.1, arm64, Python 3.13.7 |
 | git commit recorded | `d0d3c91fab7097d35a6cd6d13caca9f9b64d166f` |
+
+The config version moved from `4e535f72cb58` to `8f3641b0eafb` when
+`rerank_min_score` was added to the `retrieval_config_version` payload (it was the
+one retrieval-affecting setting missing from the hash). The default value did not
+change, so every metric above is byte-for-byte the same run; only the version that
+labels the configuration changed. The committed metrics were not regenerated.
 
 ## What these numbers do not mean
 

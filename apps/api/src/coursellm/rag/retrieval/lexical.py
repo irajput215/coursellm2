@@ -47,7 +47,7 @@ from coursellm.db.models.content import (
     TenantLexicalStats,
 )
 from coursellm.db.tenancy import TenantScope
-from coursellm.rag.analyzers import STOPWORDS, normalize_query
+from coursellm.rag.analyzers import normalize_query
 from coursellm.rag.retrieval.filters import build_predicates
 from coursellm.rag.retrieval.types import RetrievalFilters, RetrievalOutcome, SearchResult
 
@@ -61,6 +61,8 @@ _GROUPED_COLUMNS = (
     Chunk.page,
     Chunk.topic,
     Chunk.token_count,
+    Chunk.chunk_index,
+    Chunk.starts_mid_sentence,
     Document.source_type,
 )
 
@@ -85,12 +87,10 @@ async def lexical_search(
     started = time.perf_counter()
     terms = _query_terms(query)
     if not terms:
-        # A stopword-only query cannot match anything, because the index path
-        # removes stopwords before writing ``chunk_terms``. ``normalize_query``
-        # deliberately falls back to the unfiltered tokens so that *semantic*
-        # retrieval still has something to embed; for BM25 those tokens are
-        # unmatchable, so they are dropped here rather than sent to the database
-        # to scan for terms that cannot exist.
+        # A stopword-only query has no terms after the same analysis the index
+        # used, so it cannot match anything in ``chunk_terms``. Reporting an
+        # empty outcome is the honest answer; the semantic retriever still embeds
+        # the raw question, so the two halves degrade independently.
         return _empty("empty_query_terms", started)
 
     try:
@@ -164,6 +164,8 @@ async def lexical_search(
             rank=rank,
             score=round(float(row["score"]), 6),
             retriever="lexical",
+            chunk_index=row["chunk_index"],
+            starts_mid_sentence=bool(row["starts_mid_sentence"]),
         )
         for rank, row in enumerate(rows, start=1)
     ]
@@ -177,7 +179,7 @@ async def lexical_search(
 
 def _query_terms(query: str) -> list[str]:
     """Analysed query terms that can actually exist in ``chunk_terms``."""
-    return [term for term in normalize_query(query) if term not in STOPWORDS]
+    return normalize_query(query)
 
 
 async def _tenant_has_corpus(session: AsyncSession, tenant_id: uuid.UUID) -> bool:

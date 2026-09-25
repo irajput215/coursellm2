@@ -55,7 +55,7 @@ from coursellm.core.logging import get_logger
 from coursellm.db.models.assessment import Quiz
 from coursellm.db.models.learning import ProgressEvent, ProgressEventKind, QuizAttempt
 from coursellm.db.tenancy import TenantScope
-from coursellm.learning.progress import project_mastery
+from coursellm.learning.progress import mastery_weights, project_mastery
 from coursellm.llm import ChatMessage, LLMGateway, LLMRequest, ModelTask
 from coursellm.prompts.loader import PromptLibrary
 from coursellm.rag.generation.context import EVIDENCE_CLOSE_TAG, EVIDENCE_OPEN_TAG
@@ -131,7 +131,9 @@ async def evaluate_answer(
     )
     degraded = _unique([*degraded, *outcome.degraded])
 
-    before = await _mastery(session, scope, user_id=user_id, exclude_attempt_id=attempt.id)
+    before = await _mastery(
+        session, scope, user_id=user_id, exclude_attempt_id=attempt.id, settings=settings
+    )
     if outcome.score is None:
         # No grade was recorded, so there is no observation to log. The ungraded
         # placeholder row is removed rather than left to project as mastery 0.
@@ -151,7 +153,7 @@ async def evaluate_answer(
 
     attempt.score = outcome.score
     attempt.rubric = [score.model_dump(mode="json") for score in outcome.rubric]
-    attempt.misconceptions = [item_.model_dump_json() for item_ in outcome.misconceptions]
+    attempt.misconceptions = [item_.model_dump(mode="json") for item_ in outcome.misconceptions]
     kind = (
         ProgressEventKind.CONCEPT_STRUGGLED
         if outcome.score < STRUGGLE_THRESHOLD
@@ -177,7 +179,9 @@ async def evaluate_answer(
     )
     await session.flush()
 
-    after = await _mastery(session, scope, user_id=user_id, exclude_attempt_id=None)
+    after = await _mastery(
+        session, scope, user_id=user_id, exclude_attempt_id=None, settings=settings
+    )
     delta = 0.0
     if item.concept_id is not None:
         delta = round(after.get(item.concept_id, 0.0) - before.get(item.concept_id, 0.0), 6)
@@ -509,6 +513,7 @@ async def _mastery(
     *,
     user_id: uuid.UUID,
     exclude_attempt_id: uuid.UUID | None,
+    settings: Settings,
 ) -> dict[uuid.UUID, float]:
     """Project the student's mastery, optionally excluding one in-flight attempt."""
     events = list(
@@ -539,7 +544,7 @@ async def _mastery(
         )
         if exclude_attempt_id is None or attempt.id != exclude_attempt_id
     ]
-    return project_mastery(events, attempts)
+    return project_mastery(events, attempts, weights=mastery_weights(settings))
 
 
 def _unique(values: Sequence[str]) -> list[str]:

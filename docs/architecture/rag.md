@@ -238,10 +238,12 @@ these tokens, and a stemmer would fold `HNSW` and a related word together while
 splitting nothing useful.
 
 Terms are produced by the same analyser at index and query time (Unicode NFKC
-normalisation, lowercasing, stopword removal for indexing), so the term sets are
-comparable by construction. A query consisting only of stopwords falls back to the
-unfiltered terms rather than producing an empty term list and therefore an empty result
-set.
+normalisation, lowercasing, stopword removal), so the term sets are comparable by
+construction: `normalize_query` is literally `tokenize_for_index`. A query consisting
+only of stopwords therefore yields no terms, and the lexical retriever reports
+`empty_query_terms` rather than searching for terms the index cannot contain. (An
+earlier version fell back to the unfiltered tokens, which made the two analysers
+differ and forced callers to re-filter.)
 
 ### Why BM25 at all, given embeddings?
 

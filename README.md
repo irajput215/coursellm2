@@ -17,6 +17,7 @@ quality.
 
 | Document | What it covers |
 |----------|----------------|
+| [`docs/FINAL_AUDIT.md`](docs/FINAL_AUDIT.md) | Repository-wide audit: requirement traceability, claims checked against code, remaining gaps |
 | [`docs/PROJECT_AUDIT.md`](docs/PROJECT_AUDIT.md) | Audit of the prototype: what existed, what was wrong, and the migration plan |
 | [`docs/architecture/system.md`](docs/architecture/system.md) | System architecture, component justification, failure model |
 | [`docs/architecture/rag.md`](docs/architecture/rag.md) | Hybrid retrieval, BM25, RRF, reranking, citations |
@@ -26,6 +27,20 @@ quality.
 A full README with measured results and diagrams is produced at the end of the
 rebuild. Nothing is published here that cannot be regenerated from this
 repository.
+
+### Measured retrieval quality (scoped)
+
+`evals/reports/baseline.json` is a **retrieval-only** run: it uses the
+deterministic `hashing` embedder (`hashing-v1`, not a semantic model) and the
+lexical-fallback reranker over a small corpus (8 documents, 14 chunks) and 32
+golden questions (28 answerable, 4 unanswerable). Under that scope,
+context precision is 0.95, context recall 0.9226, fused MRR 0.9464 and fused
+recall@10 0.9881. Generation faithfulness, citation precision/recall and
+token/cost metrics are recorded as `not_measured` because CI runs no LLM
+provider. Reproduce with `make eval-retrieval && make eval-gate`.
+
+No screenshots are embedded yet: the UI has not been captured from a running
+app in this environment, and placeholders would overstate what is shown.
 
 ---
 
@@ -62,8 +77,10 @@ prompts/          Versioned prompt files
 infra/terraform/  AWS infrastructure as code
 docs/             Audit, architecture, decision records
 scripts/          Developer and CI helpers
-mcp_server/       MCP server exposing selected tools to external AI clients
 ```
+
+An MCP server exposing selected tools to external AI clients is planned but not
+present; it is not listed above until it exists.
 
 ---
 

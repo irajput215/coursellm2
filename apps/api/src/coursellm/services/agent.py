@@ -58,7 +58,8 @@ from coursellm.observability.attributes import (
     GRAPH_TOOL_CALLS,
     SPAN_AGENT_GRAPH,
 )
-from coursellm.services.chat import unique, validate_question
+from coursellm.services.chat import commit_turn, unique, validate_question
+from coursellm.services.chat import user_message as make_user_message
 
 logger = get_logger(__name__)
 
@@ -119,20 +120,19 @@ async def run_turn(
     # order deterministic without a schema change.
     turn_started_at = datetime.now(UTC)
 
-    user_message = Message(
-        created_at=turn_started_at,
-        tenant_id=context.tenant_id,
+    user_message = make_user_message(
+        context,
+        settings,
         conversation_id=conversation.id,
-        role=MessageRole.USER,
-        content=question,
-        citations=[],
-        degraded=[],
-        grounded=False,
-        token_count=count_tokens(question, model),
-        retrieval_config_version=settings.retrieval_config_version,
+        question=question,
+        created_at=turn_started_at,
     )
     session.add(user_message)
     await session.flush()
+    # Commit the question before the graph runs. A hard graph failure then rolls
+    # back only the answer: the question is history, which is the transcript
+    # guarantee ``services/chat`` documents and the integration suite asserts.
+    await commit_turn(session, context)
 
     initial = initial_state(
         tenant_id=context.tenant_id,
@@ -208,6 +208,9 @@ async def run_turn(
     )
     session.add(assistant_message)
     await session.flush()
+    # The answer is committed here: the question's commit already ended the
+    # request dependency's transaction, so the dependency would not commit this.
+    await commit_turn(session, context)
 
     return AgentTurnResult(
         answer=answer,
