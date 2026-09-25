@@ -1,29 +1,93 @@
+<div align="center">
+
 # CourseLLM
 
-An agentic RAG tutoring platform: a student uploads their own course material,
-states a goal, and gets answers grounded in those documents, a prerequisite-aware
-roadmap, curated resource recommendations, quizzes, and progress-adaptive
-planning — over hybrid retrieval, a knowledge graph, and an evaluated AI pipeline.
+**An agentic RAG tutoring platform — a student uploads their own course material,
+states a goal, and gets answers grounded in those documents with citations, a
+prerequisite-aware roadmap, curated resource recommendations, quizzes and
+progress-adaptive planning — over hybrid retrieval, a knowledge graph, and a
+measured evaluation pipeline.**
+
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![PostgreSQL + pgvector](https://img.shields.io/badge/PostgreSQL-pgvector-4169E1?logo=postgresql&logoColor=white)](https://github.com/pgvector/pgvector)
+[![LangGraph](https://img.shields.io/badge/LangGraph-bounded%20graph-1C3C3C)](https://langchain-ai.github.io/langgraph/)
+[![LiteLLM](https://img.shields.io/badge/LiteLLM-model%20gateway-4B5563)](https://docs.litellm.ai/)
+[![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](apps/web/)
+
+[![Ruff](https://img.shields.io/badge/lint-ruff-261230?logo=ruff&logoColor=white)](https://docs.astral.sh/ruff/)
+[![mypy](https://img.shields.io/badge/typed-mypy%20strict-2A6DB2)](https://mypy-lang.org/)
+[![Tests](https://img.shields.io/badge/tests-1643%20passing-brightgreen)](#testing)
+[![Coverage](https://img.shields.io/badge/coverage-83%25-brightgreen)](apps/api/tests/COVERAGE.md)
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
+
+</div>
+
+---
+
+## Overview
+
+CourseLLM is what "chat with your notes" should be when the notes belong to someone
+being assessed on them. Three things separate it from a demo, and each is a
+measurement rather than an intention.
+
+**The retrieval is hybrid, and the gap is measured.** The prototype this replaced
+labelled PostgreSQL `ts_rank` as BM25. In a controlled 100-document corpus, `ts_rank`
+scored a term appearing in **1 %** of documents *identically* to one appearing in
+**90 %** of them — while BM25's IDF differed by **1069×**. That is why the rebuild
+implements Okapi BM25 explicitly (`k1 = 1.2`, `b = 0.75`, per-tenant statistics) and
+fuses it with dense retrieval by **rank** rather than by a hand-tuned weight.
+
+**Tenancy is enforced inside the query, because filtering afterwards returns
+nothing.** Measured on 10,000 decoy-tenant vectors against 200 target-tenant vectors
+with `LIMIT 20`: filtering *after* a global ANN scan returned **0 rows**; a tenant
+predicate *inside* the scan returned 20. Post-filtering does not return fewer-but-
+adequate results — with a skewed tenant distribution it returns none, while latency
+still looks healthy. That is why tenant scope is a property of the query, enforced
+three ways (signed token → repository → PostgreSQL Row-Level Security), rather than a
+`WHERE` clause someone is trusted to remember.
+
+**The numbers that look best are the ones qualified hardest.** `semantic_recall_at_20
+= 1.0` reads as a perfect retriever. It is a deterministic hashing stub over 8
+documents and 14 chunks, so it measures that the plumbing is wired — **not** that
+retrieval is good. Twelve further metrics are recorded as `not_measured` with a
+reason instead of being estimated, and the regression gate refuses to compare two
+runs whose configuration hash differs. The prototype this replaced published a
+latency table whose shares summed to **115 %** while being labelled 100 %, drawn from
+a buffer that was never persisted. Nothing here is published that `make eval` cannot
+regenerate.
+
+```mermaid
+flowchart LR
+    A["Student uploads<br/>course material"] --> B["Ingestion<br/>parse · chunk · embed"]
+    B --> C["Hybrid retrieval<br/>pgvector HNSW ∪ BM25"]
+    C --> D["Reciprocal Rank Fusion<br/>k = 60"]
+    D --> E["Cross-encoder<br/>reranking"]
+    E --> F["Bounded LangGraph<br/>grounded answer + citations"]
+    F --> G["Roadmap · quiz<br/>progress"]
+    C -.-> H["Knowledge graph<br/>prerequisites"]
+    F -.-> I["RAGAS-style<br/>evaluation"]
+```
 
 > **Status: complete against the rebuild's capability list, not deployed.** Every
-> capability listed in [`docs/PROJECT_AUDIT.md`](docs/PROJECT_AUDIT.md) §6 now has
-> an implementation and a test, except the two it deliberately did not build (see
+> capability listed in [`docs/PROJECT_AUDIT.md`](docs/PROJECT_AUDIT.md) §6 now has an
+> implementation and a test, except the ones it deliberately did not build (see
 > [What this project does not do](#what-this-project-does-not-do)). Nothing in
 > `infra/terraform/` has been applied and there is no live deployment.
 
-**There are no status badges.** The workflows in `.github/workflows/` exist and are
-described in [CI/CD](#cicd), but they have never run on GitHub, so a badge would
-assert a build status that nobody has observed. The numbers in this README are the
-ones a reader can reproduce locally, and each one names the command or committed
-artefact it came from.
+**About the badges.** They state facts measured on this machine — test counts from
+`make test-unit`, `make test-security`, `make test-integration` and `make test-web`;
+coverage from [`apps/api/tests/COVERAGE.md`](apps/api/tests/COVERAGE.md); the stack
+from the dependency manifests. There is deliberately **no CI badge**: the workflows
+in [`.github/workflows/`](.github/workflows/) are validated locally but have never run
+on GitHub, so a build badge would assert a status nobody has observed.
 
-**Screenshots are pending.** No browser was available in the environment this
-README was written in, so no image is embedded. See
-[Screenshots](#screenshots) for the exact commands that produce them; a placeholder
-or mock-up would overstate what has been verified.
+**Screenshots are pending.** No browser was available in the environment this README
+was written in, so no image is embedded. See [Screenshots](#screenshots) for the exact
+commands that produce them; a placeholder would overstate what has been verified.
 
-Twelve Mermaid diagrams appear inline below. Each is also committed as a source
-file under [`docs/images/`](docs/images/) and was machine-validated with
+Thirteen Mermaid diagrams appear inline below. Each is also committed as a source file
+under [`docs/images/`](docs/images/) and was machine-validated with
 `@mermaid-js/mermaid-cli` 12.0.0 (see [Testing](#testing)).
 
 ---
@@ -843,10 +907,12 @@ serially, and the results are the ones in the table.
 
 ### Diagram validation
 
-All twelve diagrams were rendered with `@mermaid-js/mermaid-cli` 12.0.0
-(`npx -y @mermaid-js/mermaid-cli`) against a real headless Chromium. All twelve
+All thirteen diagrams were rendered with `@mermaid-js/mermaid-cli` 12.0.0
+(`npx -y @mermaid-js/mermaid-cli`) against a real headless Chromium. All thirteen
 parsed and rendered without error. The sources are committed under
-[`docs/images/`](docs/images/) and the same blocks are inline above.
+[`docs/images/`](docs/images/) and the same blocks are inline above. A Mermaid
+syntax error renders as an error box, which is worse than no diagram, so a diagram
+that has not been rendered is not included.
 
 ---
 
