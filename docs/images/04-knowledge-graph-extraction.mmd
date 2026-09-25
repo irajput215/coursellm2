@@ -1,0 +1,20 @@
+flowchart TD
+    DOC["Document ingested<br/>chunks + embeddings written"] --> SEL["Chunk selection<br/>headings · definitional cues<br/>skip references/index/appendix"]
+    SEL --> EXT["LLM structured extraction<br/>prompts/graph_extract.md<br/>with_structured_output(ExtractionResult)"]
+    EXT --> SCHEMA{"Schema validation<br/>Pydantic + enum + lengths"}
+    SCHEMA -- "invalid" --> REJ1["Reject chunk<br/>run.edges_rejected++"]
+    SCHEMA -- "valid" --> NORM["Normalisation + alias resolution<br/>NFKC · lowercase · slugify<br/>concept_aliases lookup"]
+    NORM --> RES{"Entity resolved<br/>to a concept?"}
+    RES -- "no" --> NEW["Create concept<br/>provenance + slug"]
+    RES -- "ambiguous" --> REVIEW
+    RES -- "yes" --> CONF
+    NEW --> CONF["Confidence assignment<br/>LLM + corroboration + cue + agreement"]
+    CONF --> QUOTE{"Source quote verified<br/>verbatim in chunk text?"}
+    QUOTE -- "no" --> REJ2["Reject edge<br/>provenance unverifiable"]
+    QUOTE -- "yes" --> DEDUP["Deduplicate + corroborate<br/>ON CONFLICT merge provenance"]
+    DEDUP --> BUCKET{"Confidence bucket"}
+    BUCKET -- ">= auto-accept" --> UPSERT["Upsert edge<br/>verified untouched"]
+    BUCKET -- "review floor .. auto-accept" --> REVIEW["Review queue<br/>traversable = false"]
+    BUCKET -- "< review floor" --> REJ3["Discard<br/>kept in run record only"]
+    UPSERT --> DONE["Run finished<br/>graph_extraction_runs.status = succeeded"]
+    REVIEW --> DONE

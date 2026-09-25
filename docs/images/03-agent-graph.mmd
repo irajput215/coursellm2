@@ -1,0 +1,37 @@
+flowchart TD
+    START(["START"]) --> IR["intent_router<br/>cheap model · structured output"]
+    IR --> SC["student_context<br/>deterministic · course + progress"]
+    SC --> ROUTE{"route_intent(state)<br/>pure function"}
+
+    ROUTE -- "tutor" --> TA["tutor_agent"]
+    ROUTE -- "planner" --> PA["planner_agent"]
+    ROUTE -- "recommender" --> RA["recommender_agent"]
+    ROUTE -- "assessment" --> AA["assessment_agent"]
+    ROUTE -- "progress" --> PRA["progress_agent"]
+
+    TA --> AFTER{"route_after_agent(state)"}
+    PA --> AFTER
+    RA --> AFTER
+    AA --> AFTER
+    PRA --> AFTER
+
+    AFTER -- "retrieve" --> PR["plan_retrieval<br/>deterministic · normalise + clamp"]
+    AFTER -- "tools" --> TOOLS["tools<br/>non-retrieval tool executor"]
+    AFTER -- "compose" --> AC["answer_composer"]
+
+    PR --> RET["retrieval<br/>ANN ∪ BM25 · tenant-scoped"]
+    RET --> RR["rerank<br/>cross-encoder"]
+    RR --> KG["knowledge_graph<br/>prerequisite closure"]
+    KG --> AFTER_EV{"route_after_evidence(state)"}
+
+    TOOLS --> AFTER
+
+    AFTER_EV -. "iterate → state['intent']" .-> TA
+    AFTER_EV -. "iterate → state['intent']" .-> PA
+    AFTER_EV -. "iterate → state['intent']" .-> RA
+    AFTER_EV -. "iterate → state['intent']" .-> AA
+    AFTER_EV -. "iterate → state['intent']" .-> PRA
+    AFTER_EV -- "compose" --> AC
+
+    AC --> SG["safety_guardrail"]
+    SG --> END(["END"])

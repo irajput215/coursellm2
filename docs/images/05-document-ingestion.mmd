@@ -1,0 +1,26 @@
+flowchart TD
+    UP["POST /documents<br/>multipart upload"] --> VAL{"validate_upload<br/>extension → size → content sniff"}
+    VAL -- "extension not allowed" --> E415["415 unsupported media type"]
+    VAL -- "over max_upload_bytes" --> E413["413 payload too large"]
+    VAL -- "ok" --> COURSE["Resolve course<br/>must be owned by the caller"]
+    COURSE --> SHA{"sha256 already present<br/>in this course?"}
+    SHA -- "yes, not reingest" --> REUSE["Return the existing row<br/>reused = true"]
+    SHA -- "yes, reingest" --> STORE
+    SHA -- "no" --> STORE["Store bytes first<br/>key derived from the new document id"]
+    STORE --> ROW["Insert documents row<br/>status = pending"]
+    ROW --> PARSE["Parse<br/>pypdf · python-docx · text"]
+    PARSE --> CHUNK["Chunk<br/>400 tokens · 80 overlap · min 24"]
+    CHUNK --> SCRUB["Scrub reserved markers<br/>scrub_for_storage"]
+    SCRUB --> SCAN{"Injection scan<br/>max chunk score vs thresholds"}
+    SCAN -- ">= block threshold" --> QUAR["Quarantine<br/>no chunks written"]
+    SCAN -- ">= warn threshold" --> FLAG["Flag<br/>quarantine_state = flagged"]
+    SCAN -- "clean" --> EMB
+    FLAG --> EMB["Embed in batches<br/>hashing · local · litellm"]
+    EMB --> DELETE["Delete prior chunks<br/>cascade to embeddings + terms"]
+    DELETE --> WRITE["Write chunks, chunk_embeddings<br/>and chunk_terms"]
+    WRITE --> STATS["Recompute BM25 statistics<br/>tenant_lexical_stats · tenant_corpus_stats"]
+    STATS --> READY["status = ready<br/>retrievable"]
+    QUAR --> READY
+    PARSE -. "any failure" .-> FAIL["status = failed, object removed,<br/>a newly created row is deleted"]
+    CHUNK -. "any failure" .-> FAIL
+    EMB -. "any failure" .-> FAIL

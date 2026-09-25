@@ -396,8 +396,8 @@ are drawn from the same eligible set and RRF combines comparable rankings.
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model id (recorded per vector). |
-| `EMBEDDING_DIM` | `1536` | Must match the model; validated at startup. |
+| `EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | Embedding model id, recorded per vector. The `local` provider is the default; `hashing` is the deterministic CI substitute. |
+| `EMBEDDING_DIM` | `384` | Must match the model, and must equal the dimension the migration created. A mismatch is a startup error, not a silent vector-space corruption. |
 | `RETRIEVAL_TOP_K_PER_RETRIEVER` | `20` | Candidates per retriever before fusion. |
 | `RRF_K` | `60` | RRF constant. |
 | `RERANK_ENABLED` | `true` | |

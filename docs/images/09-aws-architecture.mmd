@@ -1,0 +1,16 @@
+flowchart TB
+    USER["Browser"] --> CF["CloudFront<br/>TLS, cache, WAF-ready"]
+    CF --> ALB["Application Load Balancer<br/>public subnets"]
+    ALB --> WEB["ECS service: web<br/>nginx, static assets"]
+    ALB --> API["ECS service: api<br/>FastAPI, autoscaled"]
+    ALB -. "optional" .-> GW["ECS service: litellm gateway"]
+    API --> GW
+    API --> RDS[("RDS PostgreSQL 16<br/>pgvector, Multi-AZ<br/>private subnets")]
+    API --> EC[("ElastiCache Redis<br/>private subnets")]
+    API --> S3[("S3<br/>documents + backups")]
+    GPU["ECS task / SageMaker endpoint<br/>reranker (optional)"] --> API
+    API --> SM["Secrets Manager<br/>+ SSM Parameter Store"]
+    API --> CW["CloudWatch<br/>Logs · Metrics · Alarms"]
+    API -. "OTLP" .-> ADOT["ADOT collector sidecar"] --> CW
+    GW --> PROV["LLM providers"]
+    RDS -. "snapshots" .-> S3

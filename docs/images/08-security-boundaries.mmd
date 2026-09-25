@@ -1,0 +1,35 @@
+flowchart TB
+    subgraph Untrusted["UNTRUSTED — never enters the instruction region"]
+        UQ["User query text"]
+        DOC["Document content<br/>PDF · slides · notes · web pages"]
+        WEB["External web content<br/>recommendation lookups"]
+        TOOLRES["Tool results<br/>SQL rows · BM25 text · graph edges"]
+        LLMOUT["Raw LLM output"]
+    end
+
+    subgraph Boundary["Enforcement boundary — apps/api safety layer"]
+        DET["Injection detector<br/>deterministic + optional classifier"]
+        DELIM["Delimitation and sanitisation<br/>reserved-marker neutralisation"]
+        VAL["Output validation<br/>Pydantic strict + secret scan"]
+    end
+
+    subgraph Trusted["TRUSTED — authored and versioned by the system"]
+        SYS["System prompt<br/>prompts/**"]
+        SCHEMA["Tool schemas and permission matrix"]
+        CTX["TenantContext<br/>derived from JWT"]
+        DB[("PostgreSQL<br/>tenant-scoped rows + RLS")]
+    end
+
+    UQ --> DET
+    DOC --> DET
+    DET --> DELIM
+    SCHEMA --> DELIM
+    SYS --> DELIM
+    DELIM --> LLM["LLM call<br/>LiteLLM"]
+    TOOLRES --> DELIM
+    LLM --> LLMOUT
+    LLMOUT --> VAL
+    CTX --> SCHEMA
+    CTX --> DB
+    VAL --> OUT["Validated answer + citations"]
+    WEB --> DET

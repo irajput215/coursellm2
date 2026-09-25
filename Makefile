@@ -202,9 +202,10 @@ seed-catalogue: ## Seed the curated resource catalogue (idempotent on URL)
 api: ## Run the API with reload
 	cd $(API_DIR) && ../../$(VENV)/bin/uvicorn coursellm.main:app --reload --port 8000
 
-.PHONY: worker
-worker: ## Run the ingestion worker
-	cd $(API_DIR) && ../../$(VENV)/bin/python -m coursellm.workers.runner
+# There is deliberately no `worker` target. Ingestion runs inline in
+# services/ingestion.py: there is no durable queue, so a background callback would
+# be lost on restart and strand documents at `pending` with nothing to recover
+# them. Adding a worker is a deployment change, not a one-line Makefile change.
 
 .PHONY: web
 web: ## Run the frontend dev server

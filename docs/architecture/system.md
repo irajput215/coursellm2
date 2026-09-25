@@ -54,11 +54,11 @@ flowchart TB
     subgraph App["Application (ECS/Fargate or docker compose)"]
         API["FastAPI<br/>apps/api<br/>async, domain routers"]
         LLMGW["LiteLLM Gateway<br/>routing · fallback · cost"]
-        MCP["MCP Server<br/>stdio / SSE"]
+        MCP["MCP server<br/><i>not present</i>"]
     end
 
     subgraph Workers
-        IDX["Ingestion worker"]
+        IDX["Ingestion<br/><i>inline in POST /documents<br/>no worker process</i>"]
     end
 
     subgraph Data

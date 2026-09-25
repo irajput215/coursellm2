@@ -1,0 +1,43 @@
+flowchart TB
+    subgraph Client
+        WEB["React + TypeScript SPA<br/>apps/web"]
+    end
+
+    subgraph Edge["Edge (optional, Terraform)"]
+        CF["CloudFront"]
+        ALB["Application Load Balancer"]
+    end
+
+    subgraph App["Application (ECS/Fargate or docker compose)"]
+        API["FastAPI<br/>apps/api<br/>async, domain routers"]
+        LLMGW["LiteLLM Gateway<br/>routing · fallback · cost"]
+        MCP["MCP Server<br/>(planned — not present)"]
+    end
+
+    subgraph Ingestion["Ingestion (no worker process)"]
+        IDX["parse · chunk · embed · index<br/>inline in POST /documents"]
+    end
+
+    subgraph Data
+        PG[("PostgreSQL 16+<br/>pgvector HNSW<br/>relational + graph + RLS")]
+        REDIS[("Redis<br/>cache · rate limit")]
+    end
+
+    subgraph External
+        PROVIDERS["LLM providers<br/>OpenAI · Anthropic · Gemini"]
+        EMB["Embedding / reranker<br/>models"]
+        LS["LangSmith (optional)"]
+        OTLP["OTel collector (optional)"]
+    end
+
+    WEB --> CF --> ALB --> API
+    WEB -. "SSE stream" .-> API
+    API --> LLMGW
+    API --> PG
+    API --> REDIS
+    MCP -. "planned" .-> API
+    IDX --> PG
+    LLMGW --> PROVIDERS
+    API --> EMB
+    API -. "optional" .-> LS
+    API -. "optional" .-> OTLP

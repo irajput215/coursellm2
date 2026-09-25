@@ -1,0 +1,16 @@
+flowchart TD
+    DS["evals/datasets/golden_rag.jsonl<br/>32 questions (28 answerable, 4 unanswerable)<br/>dataset sha256 309c4d5c…"] --> RUN
+    CORP["evals/datasets/corpus/*.md<br/>8 documents · 14 chunks<br/>corpus sha256 b072f183…"] --> ING["Production ingestion pipeline<br/>HashingEmbedder · deterministic row ids"]
+    ING --> RUN["run_retrieval_eval<br/>no LLM, no network"]
+    RUN --> SEARCH["hybrid_search → rank<br/>production retrieval code path"]
+    SEARCH --> MET["evals/metrics/*<br/>retrieval · citations · system"]
+    MET --> REP["EvalReport<br/>metrics · not_measured · config · hashes"]
+    REP --> BASE[("evals/reports/baseline.json<br/>committed")]
+    REP --> CUR[("evals/reports/retrieval.json<br/>this run")]
+    BASE --> GATE{"check_regression.py<br/>compare against baseline"}
+    CUR --> GATE
+    GATE -- "config or dataset hash differs" --> REF["exit 2 · refuse to compare"]
+    GATE -- "match" --> CMP{"within absolute + relative tolerance?"}
+    CMP -- "breach, or metric missing" --> FAIL["exit 1"]
+    CMP -- "within" --> PASS["exit 0 · no regressions"]
+    RUN2["run_rag_eval<br/>adds generation and a judge"] -. "needs a provider key;<br/>no key means not_measured" .-> MET

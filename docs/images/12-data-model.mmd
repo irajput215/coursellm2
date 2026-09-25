@@ -1,0 +1,18 @@
+erDiagram
+    TENANT ||--o{ USER : has
+    TENANT ||--o{ COURSE : owns
+    COURSE ||--o{ DOCUMENT : contains
+    DOCUMENT ||--o{ CHUNK : "split into"
+    CHUNK ||--o{ CHUNK_EMBEDDING : "embedded as"
+    COURSE ||--o{ CONCEPT : "teaches"
+    CONCEPT ||--o{ CONCEPT_EDGE : "source of"
+    CONCEPT ||--o{ CONCEPT_EDGE : "target of"
+    USER ||--o{ CONVERSATION : holds
+    CONVERSATION ||--o{ MESSAGE : contains
+    USER ||--o{ ROADMAP : follows
+    ROADMAP ||--o{ ROADMAP_STEP : "ordered by"
+    USER ||--o{ QUIZ_ATTEMPT : takes
+    USER ||--o{ PROGRESS_EVENT : generates
+    RESOURCE }o--o{ CONCEPT : "covers"
+    LLM_USAGE }o--|| TENANT : "billed to"
+    EVAL_RUN ||--o{ EVAL_SAMPLE : contains

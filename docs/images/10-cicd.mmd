@@ -1,0 +1,20 @@
+flowchart TD
+    PUSH["push to main / pull request"] --> BE
+    PUSH --> INT
+    PUSH --> EV
+    PUSH --> SEC
+    PUSH --> FE
+    PUSH --> DK
+    BE["backend.yml<br/>every push and PR"] --> G1["make lint typecheck secrets-scan<br/>make test-unit test-security"]
+    INT["integration.yml<br/>every push and PR"] --> G2["make db-setup<br/>assert db-inspect ENFORCED<br/>make test-integration"]
+    EV["eval.yml<br/>PRs touching retrieval · prompts · evals"] --> G3["make eval-retrieval<br/>make eval-gate EVAL_CURRENT=retrieval.json"]
+    SEC["security.yml<br/>every push, PR, weekly cron"] --> G4["make secrets-scan audit-deps test-security"]
+    FE["frontend.yml<br/>every push and PR"] --> G5["make lint-web typecheck-web test-web build-web"]
+    DK["docker.yml<br/>PRs touching docker/ or apps/"] --> G6["build the api and web images<br/>nothing is pushed"]
+    G1 --> GATE["PR gate"]
+    G2 --> GATE
+    G3 --> GATE
+    G4 --> GATE
+    G5 --> GATE
+    G6 --> GATE
+    GATE -. "deliberately not in CI" .-> NO["no deploy · no terraform plan/apply<br/>no image push · no LLM-dependent evaluation"]
