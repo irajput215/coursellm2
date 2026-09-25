@@ -1,0 +1,13 @@
+flowchart LR
+    Q["User query"] --> PP["Query preprocessing<br/>normalise · filter extraction"]
+    PP --> MF["Metadata filter resolution<br/>tenant · user · course · doc · topic · page"]
+    MF --> SEM["Semantic retrieval<br/>pgvector HNSW cosine<br/>top-20"]
+    MF --> BM["Lexical retrieval<br/>BM25 (k1=1.2, b=0.75)<br/>top-20"]
+    SEM --> RRF["Reciprocal Rank Fusion<br/>k=60"]
+    BM --> RRF
+    RRF --> CAND["20 candidates<br/>deduplicated · tenant-scoped"]
+    CAND --> RR["Cross-encoder reranking<br/>BAAI/bge-reranker-base"]
+    RR --> TOPK["Top 5 passages"]
+    TOPK --> CTX["Context assembly<br/>token budget · citation ids"]
+    CTX --> GEN["Guarded generation<br/>LiteLLM"]
+    GEN --> ANS["Answer + inline citations"]

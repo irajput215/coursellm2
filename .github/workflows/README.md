@@ -61,7 +61,7 @@ if it fails, the job fails.
 `eval.yml` runs the LLM-free retrieval half only. No provider key is configured,
 so the runner records every judge-derived metric as `not_measured` with a stable
 reason; the workflow must not turn a missing measurement into a failure. A
-mistake worth naming: `make eval-gate` defaults to `evals/reports/latest.json`,
+mistake worth naming: `make eval-gate` defaults to the committed `evals/reports/retrieval.json`,
 which is gitignored and stale in a clean checkout. The workflow passes
 `EVAL_CURRENT=evals/reports/retrieval.json` so the gate compares the report the
 previous step actually wrote against the committed retrieval baseline.

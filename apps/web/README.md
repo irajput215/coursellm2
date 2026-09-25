@@ -48,15 +48,17 @@ build cannot pass with a type error in it.
   control; citations arrive as a `citations` event and render as expandable
   chips. Markdown is rendered with `remark-gfm` and code fences are
   syntax-highlighted with a language label and a copy button.
-- **Written-down degradation.** The SSE contract does not carry `grounded` or
-  `degraded`, so after a turn completes the client reconciles the persisted
+- **Written-down degradation.** The SSE `done` event carries `grounded`, `degraded`
+  and the `conversation_id`, so the client does not need a reconciliation round
+  trip (an earlier revision did, and resolved the gap). If a deployment's stream
+  omits them the client still reconciles the persisted
   assistant message from `GET /chat/conversations/{id}` and only then shows the
   "answer quality is reduced" banner. It never invents those flags.
 - **Citations.** The API deliberately exposes citation metadata (filename, page,
-  source type, document id) and *not* the retrieved passage text. A citation
+  source type, document id) and a bounded, sentence-trimmed quote of the evidence. A citation
   chip therefore expands to that metadata plus a link to the source document,
-  and says plainly that the passage text is not returned. If a deployment ever
-  adds a `quote`/`excerpt`/`passage` field it is rendered automatically
+  so the passage can be checked rather than taken on trust. If a deployment omits
+  the `quote`/`excerpt`/`passage` field the chip degrades to metadata alone
   (`src/lib/citations.ts`).
 - **Proposed actions.** A consequential write comes back as a `proposed_actions`
   entry with a signed, expiring token. The client renders it with a Confirm

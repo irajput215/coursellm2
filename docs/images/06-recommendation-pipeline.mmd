@@ -1,0 +1,15 @@
+flowchart TD
+    REQ["GET /recommendations<br/>course_id · concept_ids? · limit"] --> MAST["load_mastery()<br/>projection of append-only evidence"]
+    MAST --> GAPS{"Resolve the gap set<br/>documented precedence"}
+    GAPS -- "explicit concept_ids" --> GSET["Gap set"]
+    GAPS -- "unfinished active roadmap steps" --> GSET
+    GAPS -- "knowledge_gap over weak concepts" --> GSET
+    GAPS -- "none" --> NOP["personalised = false<br/>degraded: no_gaps"]
+    GSET --> CAT{"Catalogue coverage<br/>covering(gap slugs)"}
+    NOP --> CAT
+    CAT -- "gap with no resource" --> DEG["degraded:<br/>no_catalogue_coverage:slug"]
+    CAT -- "candidates" --> RANK["rank()<br/>coverage 0.55 · difficulty 0.20<br/>trust 0.15 · recency 0.10"]
+    RANK --> TOP["Top limit rows"]
+    TOP --> EXP["explain()<br/>per-contribution score decomposition"]
+    EXP --> OUT["RecommendationResult<br/>recommendations · gaps · degraded · personalised"]
+    DEG --> OUT

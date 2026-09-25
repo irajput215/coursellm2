@@ -56,7 +56,7 @@ DATABASE_URL="postgresql+asyncpg://coursellm_app@localhost:5432/coursellm_dev" \
 | `hnsw_ef_search` | 100 |
 | database | PostgreSQL 18.4 (`coursellm_dev`), connected as the RLS-enforcing `coursellm_app` role |
 | machine | `Ishus-MacBook-Air.local`, macOS 26.5.1, arm64, Python 3.13.7 |
-| git commit recorded | `d0d3c91fab7097d35a6cd6d13caca9f9b64d166f` |
+| git commit recorded | see `git_sha` in `baseline.json`; the committed baseline was regenerated during final hardening |
 
 The config version moved from `4e535f72cb58` to `8f3641b0eafb` when
 `rerank_min_score` was added to the `retrieval_config_version` payload (it was the
@@ -106,6 +106,15 @@ present.
 
 The README must not be read as claiming the prototype's unreproducible numbers. It
 claims strictly less, and every claim it makes names the configuration that produced it.
+
+Both committed reports were regenerated during final hardening, after the
+configuration-version change that added `rerank_min_score` to the hash. The
+regeneration was checked explicitly: **no quality metric moved** (only wall-clock
+latency, which is why the latency tolerances are loose), and the dataset and corpus
+SHA-256 values are unchanged. The `git_sha` recorded in each artefact is the commit
+that was checked out when that artefact was produced, so it may lag the current
+`HEAD`; the dataset, corpus and configuration hashes are the durable identifiers,
+not the commit.
 
 The git commit is the checked-out commit. The working tree carried the
 uncommitted feature branch changes that produced this harness, so the SHA
