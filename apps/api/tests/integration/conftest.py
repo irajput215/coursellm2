@@ -36,7 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from coursellm.api.app import create_app
 from coursellm.api.deps import get_settings_dep
 from coursellm.core.config import Environment, Settings
-from coursellm.db.base import TENANT_SCOPED_TABLES
+from coursellm.db.base import GLOBAL_TABLES, TENANT_SCOPED_TABLES
 from coursellm.db.session import dispose_engine
 from coursellm.security.passwords import hash_password
 
@@ -48,11 +48,14 @@ OWNER_DATABASE_URL_ENV = "TEST_OWNER_DATABASE_URL"
 
 SEED_PASSWORD = "seed-password-123"
 
-# ``tenants`` is outside the RLS boundary (a policy would make tenant creation
-# impossible) but still has to be emptied between tests. The rest come from the
-# single source of truth in ``coursellm.db.base`` so a new tenant-scoped table
-# cannot be forgotten here.
-_TABLES_TO_TRUNCATE: tuple[str, ...] = ("tenants", *sorted(TENANT_SCOPED_TABLES))
+# ``tenants`` and the global catalogue (``resources``/``resource_concepts``) are
+# outside the RLS boundary but still have to be emptied between tests, so they
+# come from ``GLOBAL_TABLES`` rather than being repeated in each test module.
+# ``alembic_version`` is the one exception: truncating it would make the database
+# look unmigrated. The tenant-scoped tables come from the single source of truth
+# in ``coursellm.db.base`` so a new one cannot be forgotten here.
+_TRUNCATABLE_GLOBAL: frozenset[str] = frozenset(GLOBAL_TABLES) - {"alembic_version"}
+_TABLES_TO_TRUNCATE: tuple[str, ...] = tuple(sorted(_TRUNCATABLE_GLOBAL | TENANT_SCOPED_TABLES))
 
 
 def _owner_database_url() -> str:

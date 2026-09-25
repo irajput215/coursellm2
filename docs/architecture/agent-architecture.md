@@ -836,15 +836,19 @@ Per-tool notes that are not visible in the table:
   implementation detail: it is billed to `llm_usage`, versioned by prompt version, and
   is not agent reasoning. The agent cannot see or influence the handler's internal
   prompts.
-- `update_learning_plan` is idempotent on `idempotency_key`, so a retried write after a
-  timeout does not create a duplicate revision.
-- `get_recommendations` reads the curated `resources` catalogue only; when
-  `search_web_sources` is unavailable it returns the catalogue subset with
-  `degraded: ["external_sources_unavailable"]`.
+- `update_learning_plan` is idempotent by **content**: re-planning a goal whose
+  deterministic plan is byte-for-byte the current revision returns the current
+  roadmap instead of writing a new one. There is no `idempotency_key` column; the
+  `(goal, plan content)` pair is the key. See
+  `services/roadmap.py::create_or_reuse`.
+- `get_recommendations` reads the curated `resources` catalogue only. When
+  `search_web_sources` is enabled but makes no outbound call, it returns the result
+  with `degraded: ["outbound_fetch_deferred"]`.
 
-Only the read-only, `side_effects = "none"` tools are exposed through
-`mcp_server/`. Write and external tools are absent from the MCP surface, so a
-misconfigured MCP client cannot reach them.
+There is no MCP server. Selected read-only tools were intended to be exposed through an
+MCP surface, but the directory is empty and the README no longer claims it; when it is
+built, write and external tools must stay off that surface so a misconfigured client
+cannot reach them.
 
 ---
 
@@ -1150,9 +1154,6 @@ asserts quality. Keeping the two separate is what stops a prompt change from bei
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `AGENT_MODEL` | set per deployment | Reasoning model for the five agent nodes. |
-| `AGENT_FALLBACK_MODEL` | set per deployment | Attempted by LiteLLM when the primary route fails. |
-| `AGENT_ROUTER_MODEL` | a small/cheap model | Used by `intent_router` only. |
 | `AGENT_TEMPERATURE` | `0.1` | Agent and composer sampling temperature; the router uses `0.0`. |
 | `GRAPH_MAX_STEPS` | `8` | Agent-node executions per turn. |
 | `AGENT_MAX_RETRIEVAL_PASSES` | `2` | Retrieval laps per turn. |
@@ -1163,10 +1164,14 @@ asserts quality. Keeping the two separate is what stops a prompt change from bei
 | `AGENT_TOOL_MAX_RETRIES` | `1` | Retries for read-only tools. |
 | `AGENT_ALLOW_EXTERNAL_TOOLS` | `false` | Enables `side_effects = "external"` tools. |
 | `AGENT_WEB_SEARCH_ENABLED` | `false` | Enables `search_web_sources` for tutor and recommendation. |
-| `AGENT_REQUIRE_WRITE_CONFIRMATION` | `false` | Wraps write tools in `interrupt()` for human confirmation. |
+| `AGENT_REQUIRE_WRITE_CONFIRMATION` | `false` | Withholds **every** write as a signed `ProposedAction`; when false, only a consequential `update_learning_plan` is withheld. |
 | `GRAPH_RECURSION_LIMIT` | `2 * GRAPH_MAX_STEPS + 8` | LangGraph super-step ceiling. |
 | `INTENT_MIN_CONFIDENCE` | `0.55` | Below this, the router falls back to pattern rules. |
 | `GROUNDING_MIN_EVIDENCE` | `1` | Minimum passages for the grounding gate. |
+
+There is no `AGENT_MODEL`, `AGENT_FALLBACK_MODEL` or `AGENT_ROUTER_MODEL`: the
+gateway routes by `ModelTask` and the agent layer records the model
+`resolve_model` actually returned (see §14.1 row 7).
 | `GROUNDING_MIN_RERANK_SCORE` | per reranker calibration | Minimum cross-encoder score for a passage to count as evidence. |
 | `HISTORY_WINDOW_MESSAGES` | `20` | Messages rehydrated into the state. |
 | `SUMMARY_TRIGGER_MESSAGES` | `40` | Length at which the offline summariser writes `conversations.summary`. |
@@ -1196,37 +1201,37 @@ because it makes every other claim in it unreliable.
 | 4 | `retrieved_documents` accumulates across retrieval passes | It does, via `operator.add`; `rerank` therefore emits scored copies and the composer de-duplicates by `chunk_id`, keeping the scored entry | The reducer is append-only by design so a second pass accumulates rather than discarding the first. Carrying the rerank score onto the accumulated entry without a mutable channel is the straightforward consequence. |
 | 5 | Non-tutor intents are phrased by `answer_composer` | Tutor turns go through the model; planner, recommender, assessment and progress turns are phrased deterministically from their typed artifacts | The artifacts are already structured and validated. Asking a model to restate validated JSON adds latency, cost and a hallucination surface for no information gain. |
 | 6 | The graph is the chat path | `POST /api/v1/chat` and `/chat/stream` default to the graph; the request body's `"engine": "rag"` selects the direct retrieval-augmented path, and the response carries the routed `intent`, the aggregated `degraded` reasons and the `trace_id` | The direct path must stay reachable, testable and comparable — it is what the graph's `retrieval`, `rerank` and `answer_composer` nodes call. Both engines persist through the same helper and share `AnswerGenerator`, so the citation and refusal machinery cannot diverge; the escape hatch changes routing, not grounding. |
+| 7 | Per-role agent models are pinned by `AGENT_MODEL`, `AGENT_FALLBACK_MODEL` and `AGENT_ROUTER_MODEL` | The settings were deleted. `ModelTask` is the single model-selection mechanism; the agent layer records the model `resolve_model` actually returned | A setting that is recorded but cannot change routing is a configuration option that documents intent without changing behaviour, which is the one thing it must not do. Deleting it removes a second, unenforced source of truth instead of adding an override path that the rest of the gateway would not honour. |
 
 ### 14.2 Known gaps
 
 These are things this document specifies that the code does **not** yet do. Each is a
-deliberate deferral with a named owner PR, not an oversight.
+deliberate deferral, not an oversight.
 
 | Gap | Impact | Where it is closed |
 |-----|--------|--------------------|
-| `AGENT_MODEL`, `AGENT_FALLBACK_MODEL` and `AGENT_ROUTER_MODEL` are read and recorded in `evaluation_metadata`, but the gateway still selects the provider model from `ModelTask` alone | A per-role model override is recorded but has no effect on routing. The knob currently documents intent without changing behaviour, which is the one thing a configuration option must not do. | Wire an explicit override through `LLMRequest` in a hardening pass, or delete the settings so `ModelTask` is the single mechanism. Recorded in PR 23. |
-| `AGENT_REQUIRE_WRITE_CONFIRMATION`, the `interrupt()` wrapper and the `ProposedAction` flow in §7.1 are not wired | Consequential-write confirmation is specified but absent. It is not currently exploitable, because every write tool is a typed stub that performs no write. | The write tools are implemented in PR 11 (`update_learning_plan`) and PR 13 (`create_quiz`, `evaluate_answer`); the confirmation wrapper must land with the first of them, not after. |
-| `search_course` returns the course and its ready documents, without the module/lecture/topic nodes §7.2 describes | Course structure is coarser than specified, so a "which lecture covers this?" question is answered from documents rather than from structure. | Needs a schema for course structure; tracked for PR 11, which already models ordered roadmap steps. |
-| `search_web_sources` performs no outbound HTTP | The tool is registered only when `AGENT_WEB_SEARCH_ENABLED` is set and returns a typed empty result with `degraded=["external_sources_unavailable"]` | PR 12, which also owns the domain allowlist that makes outbound fetching safe. |
+| `search_course` returns the course and its ready documents, without the module/lecture/topic nodes §7.2 describes | Course structure is coarser than specified, so a "which lecture covers this?" question is answered from documents rather than from structure. | Needs a schema for course structure. |
+| `search_web_sources` performs no outbound HTTP | The tool is registered only when `AGENT_WEB_SEARCH_ENABLED` is set and returns a typed empty result with `degraded=["outbound_fetch_deferred"]`. | A future PR that also owns the domain allowlist which makes outbound fetching safe. |
+| Agent role prompts live in `agents/nodes/agents.py` rather than `prompts/` (see §14.1 row 2) | The prompts are versioned with the code but not with the prompt library, so the evaluator cannot vary them per run. | A prompt-library migration that keeps `tests/unit/test_prompt_loader.py` green. |
 
-### 14.3 Typed stubs
+Closed in PR 23 and removed from this table: the agent-model settings (deleted; see
+§14.1 row 7) and the write-confirmation gap. `ToolExecutor` withholds a consequential
+`update_learning_plan` (and, when `AGENT_REQUIRE_WRITE_CONFIRMATION` is set, every write)
+as a signed `ProposedAction`; `POST /chat/confirm` re-validates the signature, expiry,
+tenant, permission matrix and argument schema before the handler runs. The setting
+therefore changes behaviour rather than merely recording intent.
 
-Six tools are registered with their real schemas, permission requirements and audit
-behaviour, but return typed empty results with a named degradation reason instead of
-data. They are honest stubs rather than fabricated answers, which matters because a tool
-that invents a recommendation is worse than one that says it has none.
+### 14.3 Tools
 
-| Tool | Returns until implemented | Owner |
-|------|---------------------------|-------|
-| `search_knowledge_graph` | `[]` with `knowledge_graph_empty` | PR 10 |
-| `update_learning_plan` | typed empty roadmap with `tool_unavailable` | PR 11 |
-| `get_recommendations` | `[]` with `tool_unavailable` | PR 12 |
-| `search_web_sources` | `[]` with `external_sources_unavailable` | PR 12 |
-| `create_quiz`, `evaluate_answer` | typed empty results with `tool_unavailable` | PR 13 |
-
-`search_documents`, `search_books`, `search_course` and `get_student_progress` are wired
-to real logic: the first two run the full `rerank(rrf(hybrid_search(…)))` pipeline on the
-tenant-scoped session.
+Every registered tool is implemented. `search_documents` and `search_books` run the full
+`rerank(rrf(hybrid_search(…)))` pipeline on the tenant-scoped session; `search_course`
+reads the course and its ready documents; `search_knowledge_graph` traverses the real
+repository; `get_student_progress` projects the caller's own append-only evidence;
+`create_quiz`, `evaluate_answer` and `update_learning_plan` perform their writes (or
+propose them for confirmation); `get_recommendations` ranks the seeded catalogue. The one
+tool that does not reach the network is `search_web_sources`, which returns a typed empty
+result with `outbound_fetch_deferred`. A model failure inside a tool still degrades to a
+typed empty result with a named reason rather than being papered over.
 
 ### 14.4 Gaps closed by the request-path wiring
 

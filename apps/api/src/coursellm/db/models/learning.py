@@ -208,7 +208,7 @@ class QuizAttempt(UUIDPrimaryKeyMixin, TenantScopedMixin, Base):
     rubric: Mapped[list[dict[str, Any]]] = mapped_column(
         JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
     )
-    misconceptions: Mapped[list[str]] = mapped_column(
+    misconceptions: Mapped[list[dict[str, Any]]] = mapped_column(
         JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
     )
     created_at: Mapped[datetime] = mapped_column(

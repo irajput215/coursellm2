@@ -70,7 +70,7 @@ async def create_quiz(args: CreateQuizArgs, ctx: ToolContext) -> QuizDraft:
     assert ctx.session is not None  # narrowed by _require_write_context
     assert ctx.gateway is not None
     assert ctx.user_id is not None
-    service = AssessmentService(ctx.session, TenantScope(ctx.tenant_id))
+    service = AssessmentService(ctx.session, TenantScope(ctx.tenant_id), ctx.settings)
     return await service.generate(
         user_id=ctx.user_id,
         settings=ctx.settings,
@@ -89,7 +89,7 @@ async def evaluate_answer(args: EvaluateAnswerArgs, ctx: ToolContext) -> Assessm
     assert ctx.session is not None  # narrowed by _require_write_context
     assert ctx.gateway is not None
     assert ctx.user_id is not None
-    service = AssessmentService(ctx.session, TenantScope(ctx.tenant_id))
+    service = AssessmentService(ctx.session, TenantScope(ctx.tenant_id), ctx.settings)
     return await service.evaluate_existing_attempt(
         attempt_id=args.quiz_attempt_id,
         item_id=args.item_id,

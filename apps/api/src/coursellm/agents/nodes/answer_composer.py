@@ -129,7 +129,7 @@ def make_answer_composer_node(
             ),
             models={
                 **(_metadata(state).get("models") or {}),
-                state.get("intent", "tutor"): model_name or settings.resolved_agent_model,
+                state.get("intent", "tutor"): model_name or model,
             },
             prompt_versions={
                 **(_metadata(state).get("prompt_versions") or {}),

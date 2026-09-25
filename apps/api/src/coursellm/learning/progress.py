@@ -37,7 +37,9 @@ from coursellm.db.models.learning import ProgressEvent, ProgressEventKind, QuizA
 
 #: Recency half-life for mastery decay, in days.
 MASTERY_HALF_LIFE_DAYS = 30.0
-#: Weights of the three readings combined into the projection. They sum to 1.0.
+#: Default weights of the three readings combined into the projection. They sum
+#: to 1.0. The application reads them from :class:`~coursellm.core.config.Settings`
+#: (``MASTERY_*_WEIGHT``); these literals are the pure-function defaults.
 MASTERY_MEAN_WEIGHT = 0.5
 MASTERY_BEST_WEIGHT = 0.3
 MASTERY_LATEST_WEIGHT = 0.2
@@ -49,6 +51,39 @@ VELOCITY_MIN_MASTERED_CONCEPTS = 2
 VELOCITY_MASTERY_THRESHOLD = 0.6
 #: Default "not practised lately" horizon, in days.
 DEFAULT_STALE_DAYS = 30.0
+
+_WEIGHT_SUM_TOLERANCE = 1e-9
+
+
+@dataclass(frozen=True, slots=True)
+class MasteryWeights:
+    """The weights of the three readings combined into the projection.
+
+    Frozen and validated so a drifted set fails where it is constructed rather
+    than silently rescaling every mastery value.
+    """
+
+    mean: float = MASTERY_MEAN_WEIGHT
+    best: float = MASTERY_BEST_WEIGHT
+    latest: float = MASTERY_LATEST_WEIGHT
+
+    def __post_init__(self) -> None:
+        total = self.mean + self.best + self.latest
+        if abs(total - 1.0) > _WEIGHT_SUM_TOLERANCE:
+            msg = f"The mastery weights must sum to 1.0; got {total!r}."
+            raise ValueError(msg)
+
+
+DEFAULT_MASTERY_WEIGHTS = MasteryWeights()
+
+
+def mastery_weights(settings: Any) -> MasteryWeights:
+    """The mastery weights from configuration."""
+    return MasteryWeights(
+        mean=settings.mastery_mean_weight,
+        best=settings.mastery_best_weight,
+        latest=settings.mastery_latest_weight,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,7 +176,10 @@ def _observations(
 
 
 def project_mastery(
-    events: Sequence[ProgressEvent], attempts: Sequence[QuizAttempt]
+    events: Sequence[ProgressEvent],
+    attempts: Sequence[QuizAttempt],
+    *,
+    weights: MasteryWeights = DEFAULT_MASTERY_WEIGHTS,
 ) -> dict[uuid.UUID, float]:
     """Project per-concept mastery in ``[0, 1]`` from the append-only log.
 
@@ -175,9 +213,7 @@ def project_mastery(
         best = max(value * decay for value, _, decay, _ in decayed)
         most_recent = max(decayed, key=lambda item: item[3])
         latest = most_recent[0] * most_recent[2]
-        projected = (
-            MASTERY_MEAN_WEIGHT * mean + MASTERY_BEST_WEIGHT * best + MASTERY_LATEST_WEIGHT * latest
-        )
+        projected = weights.mean * mean + weights.best * best + weights.latest * latest
         mastery[concept_id] = round(_clip01(projected), 6)
     return mastery
 
@@ -274,6 +310,7 @@ def attempt_counts(attempts: Sequence[QuizAttempt]) -> dict[uuid.UUID, int]:
 
 __all__ = [
     "DEFAULT_MASTERY_THRESHOLD",
+    "DEFAULT_MASTERY_WEIGHTS",
     "DEFAULT_STALE_DAYS",
     "MASTERY_BEST_WEIGHT",
     "MASTERY_HALF_LIFE_DAYS",
@@ -282,9 +319,11 @@ __all__ = [
     "VELOCITY_MASTERY_THRESHOLD",
     "VELOCITY_MIN_MASTERED_CONCEPTS",
     "VELOCITY_WINDOW_DAYS",
+    "MasteryWeights",
     "attempt_counts",
     "last_seen_map",
     "learning_velocity",
+    "mastery_weights",
     "project_mastery",
     "stale_concepts",
     "weak_concepts",

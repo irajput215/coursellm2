@@ -135,7 +135,7 @@ async def update_learning_plan(args: UpdateLearningPlanArgs, ctx: ToolContext) -
             return _degraded_only(args, "goal_unresolved")
         goal_text = concept.name
 
-    service = RoadmapService(ctx.session, scope)
+    service = RoadmapService(ctx.session, scope, ctx.settings)
     roadmap, plan, _created = await service.create_or_reuse(
         user_id=ctx.user_id,
         settings=ctx.settings,

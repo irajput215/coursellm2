@@ -934,10 +934,11 @@ Notes on this statement:
 Whether the thresholds are right is an empirical question, and it is answered with a
 measurement rather than an assertion: the precision of auto-accepted edges is computed
 against a human-reviewed sample drawn from the review queue, per relation and per
-confidence band. That is produced by the graph evaluation runner over
-`evals/datasets/golden_graph.jsonl` and published in `evals/reports/`. If
-auto-accept precision is below the gate, the threshold moves — the gate is in CI
-(`system.md` §9), not in a comment.
+confidence band. **That runner and its golden set
+(`evals/datasets/golden_graph.jsonl`) are not implemented yet**; the committed
+evaluation is retrieval-only (`evals/reports/baseline.json`). Until they exist the
+thresholds are the documented defaults, not calibrated values, and this document says
+so rather than quoting a precision it cannot produce.
 
 ---
 
@@ -1138,9 +1139,10 @@ phrased. Three failure modes, three lists, one fusion function.
 
 ### 9.4 Degradation
 
-- `GRAPH_RETRIEVAL_ENABLED=false`, an empty graph, or a failed linking step → RRF runs
-  over two lists, exactly as in `rag.md`. `degraded: ["knowledge_graph_empty"]` is
-  recorded so the difference is visible in evaluation.
+- An empty graph or a failed linking step → RRF runs over two lists, exactly as in
+  `rag.md`; there is no `GRAPH_RETRIEVAL_ENABLED` setting because graph neighbours are
+  not a fused list yet. `degraded: ["knowledge_graph_empty"]` is recorded so the
+  difference is visible in evaluation.
 - Graph query timeout → the graph list is dropped for that request only.
 - No concept linked to the query → expansion is skipped; this is the common case for
   conversational queries and is not an error.
@@ -1242,19 +1244,22 @@ retrieval in `rag.md` §3:
 
 ### 11.5 Extraction and confidence
 
-- `tests/graph/test_extraction_gates.py` — one test per row of the §5.3 table. The
-  fabricated-quote case is the important one: a `source_quote` that does not appear in
-  the chunk must be rejected, because that is the mechanism that makes provenance real.
-- `tests/graph/test_confidence.py` — unit tests over signal combinations asserting the
-  bucket for each: a high-LLM-confidence inferred edge stays in review; an explicit,
-  thrice-corroborated edge auto-accepts; a contradictory edge against a verified one is
-  never written.
-- `tests/graph/test_verified_immutability.py` — asserts the upsert cannot modify a row
-  with `verified = true`, including under repeated corroboration.
+- `apps/api/tests/unit/test_graph_extraction.py` — the extraction gates, one test per
+  row of the §5.3 table. The fabricated-quote case is the important one: a
+  `source_quote` that does not appear in the chunk must be rejected, because that is
+  the mechanism that makes provenance real.
+- `apps/api/tests/unit/test_graph_confidence.py` — unit tests over signal combinations
+  asserting the bucket for each: a high-LLM-confidence inferred edge stays in review;
+  an explicit, thrice-corroborated edge auto-accepts; a contradictory edge against a
+  verified one is never written.
+- `apps/api/tests/integration/test_graph_extraction_pipeline.py::test_verified_edge_is_never_overwritten`
+  — asserts the upsert cannot modify a row with `verified = true`, including under
+  repeated corroboration.
 - The precision of auto-accepted edges is measured, not asserted in a unit test: it is
-  computed against the human-reviewed sample by the graph evaluation runner over
-  `evals/datasets/golden_graph.jsonl` and published in `evals/reports/`. The CI gate
-  reads that artefact; no threshold is quoted here without a run that produced it.
+  intended to be computed against the human-reviewed sample by a graph evaluation
+  runner over `evals/datasets/golden_graph.jsonl`. **Neither the golden set nor the
+  runner exists yet**, so no precision figure is quoted here; that is the honest state,
+  and the retrieval baseline is the only committed evaluation artefact.
 
 ---
 
@@ -1262,17 +1267,18 @@ retrieval in `rag.md` §3:
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `GRAPH_RETRIEVAL_ENABLED` | `true` | Adds the graph list to RRF fusion. |
-| `GRAPH_EXPANSION_K` | `12` | Maximum neighbour concepts pulled per query. |
+| `GRAPH_EXTRACTION_ENABLED` | `true` | Whether ingestion runs the extraction pipeline. |
 | `GRAPH_MAX_DEPTH` | `3` | Depth cap for closure traversal. |
 | `GRAPH_MIN_TRAVERSABLE_CONFIDENCE` | `0.60` | Below this, an edge is excluded from traversal and answers. |
 | `GRAPH_AUTO_ACCEPT_CONFIDENCE` | `0.75` | Threshold for writing a traversable edge without review (with an explicit cue and two supporting documents). |
 | `GRAPH_REVIEW_FLOOR_CONFIDENCE` | `0.50` | Below this, an edge is discarded rather than queued. |
 | `GRAPH_CROSS_COURSE_EDGES` | `false` | Whether edges may join concepts from different courses. |
-| `GRAPH_STATEMENT_TIMEOUT_MS` | `2000` | Per-query traversal timeout. |
-| `GRAPH_EXTRACTION_MODEL` | set per deployment | Model used by the extraction pipeline. |
-| `GRAPH_EXTRACTION_PROMPT_VERSION` | recorded per run | Prompt revision written to every extracted concept and edge. |
-| `GRAPH_EXTRACTION_MAX_CHUNKS_PER_DOC` | `200` | Bound on extraction cost per document. |
+| `GRAPH_STATEMENT_TIMEOUT_MS` | `1500` | Per-query traversal timeout. |
+| `GRAPH_EXTRACTION_MODEL` | set per deployment | Model used by the extraction pipeline; empty falls back to `FAST_MODEL`. |
+| `GRAPH_EXTRACTION_PROMPT_VERSION` | `graph-extract-v1` | Prompt revision written to every extracted concept and edge. |
+| `GRAPH_MAX_EXTRACTION_CHUNKS_PER_DOCUMENT` | `200` | Bound on extraction model calls per document. |
+| `GRAPH_MAX_EDGES_PER_CHUNK` | `20` | Per-response cap on edges one chunk may contribute. |
+| `GRAPH_MAX_EDGES_PER_DOCUMENT` | `200` | Per-document cap on written edges. |
 | `GRAPH_LLM_CONFIDENCE_CAP` | `0.80` | Ceiling applied to a model's self-reported confidence. |
 | `GRAPH_W_BASE` | `0.15` | Constant term in the confidence model. |
 | `GRAPH_W_LLM` | `0.25` | Weight of the (capped) LLM self-report. |
@@ -1282,7 +1288,15 @@ retrieval in `rag.md` §3:
 
 The five confidence weights must sum to 1.0; the application validates this at startup,
 because a drifted weight set silently changes which edges are traversable, and that must
-not be discoverable only from a behaviour change.
+not be discoverable only from a behaviour change. The thresholds are validated in the
+same place, and the same values are used to build
+:class:`coursellm.graph.confidence.ConfidenceWeights` for each extraction run.
+
+Two knobs this document previously named do **not** exist, because the features they
+described do not: `GRAPH_RETRIEVAL_ENABLED` (graph neighbours are not yet a third ranked
+list in RRF) and `GRAPH_EXPANSION_K` (there is no neighbour-expansion stage; a closure is
+bounded by `GRAPH_MAX_DEPTH` and the tool's `limit`). They are removed from this table
+rather than left as configuration that changes nothing.
 
 `extraction_config_version` on `graph_extraction_runs` is a hash of the extraction
 configuration (model, prompt version, chunk-selection thresholds, weight set), recorded
@@ -1312,8 +1326,14 @@ unreliable.
 
 | Gap | Impact | Where it is closed |
 |-----|--------|--------------------|
-| The `GRAPH_*` knobs this document names (`GRAPH_AUTO_ACCEPT_CONFIDENCE`, `GRAPH_REVIEW_FLOOR_CONFIDENCE`, `GRAPH_LLM_CONFIDENCE_CAP`, the five `GRAPH_W_*` weights, `GRAPH_CROSS_COURSE_EDGES`, `GRAPH_EXTRACTION_PROMPT_VERSION`, `GRAPH_EXPANSION_K`, `GRAPH_RETRIEVAL_ENABLED`) are module constants rather than settings | The confidence model and thresholds cannot be tuned per environment without a code change, which is exactly what the evaluation harness needs to be able to vary. Note also that `GRAPH_MIN_EDGE_CONFIDENCE` (0.55) exists in settings but is **unused**, because the document's model has a separate review floor (0.50) and auto-accept threshold (0.75). | PR 23 hardening: promote the constants to settings and delete the unused one. |
-| There is no `graph:review` permission in the tool permission matrix | The review queue is reachable only through `search_knowledge_graph(include_below_threshold=True)`, which is constructed default-off and which no agent holds. A security test asserts that no agent can set it and that `GRAPH_WRITE` stays forbidden. A first-class permission would be cleaner. | PR 16 (AI security hardening), which owns the permission matrix. |
-| `knowledge_gap` takes a caller-supplied mastery map | The document's query joins `progress_events` and `quiz_attempts`, which do not exist yet, so the join cannot be written. The pure function is correct and tested; only its input source is deferred. | PR 13, which creates those tables. |
-| Graph edges are not yet a third ranked list in RRF | The repository and the tool are real, but `hybrid_search` fuses two lists. Graph neighbours are available to an agent as a *tool* rather than as a retrieval participant, so prerequisite questions are answered well while graph-augmented *ranking* is not yet exercised. | PR 14, alongside the evaluation harness that would measure whether the third list helps. Adding an unmeasured ranking signal is not an improvement. |
+| Graph edges are not yet a third ranked list in RRF | The repository and the tool are real, but `hybrid_search` fuses two lists. Graph neighbours are available to an agent as a *tool* rather than as a retrieval participant, so prerequisite questions are answered well while graph-augmented *ranking* is not exercised. | The evaluation harness that would measure whether the third list helps. Adding an unmeasured ranking signal is not an improvement. |
+| `search_web_sources` performs no outbound HTTP | The tool returns an empty, typed result with `outbound_fetch_deferred`; it is registered only when `AGENT_WEB_SEARCH_ENABLED` is set. | A future PR that also owns the domain allowlist which makes outbound fetching safe. |
 | `documents.title` does not exist; the query uses `documents.filename` | Cosmetic, and the query is correct against the real schema. The document's DDL reference is what is wrong. | Corrected here rather than by adding a column for a doc typo. |
+
+Closed by PR 23 and removed from this table: the confidence weights and thresholds are
+now `Settings` fields (`GRAPH_W_*`, `GRAPH_LLM_CONFIDENCE_CAP`,
+`GRAPH_AUTO_ACCEPT_CONFIDENCE`, `GRAPH_REVIEW_FLOOR_CONFIDENCE`) built into
+`ConfidenceWeights` per run; `GRAPH_MIN_EDGE_CONFIDENCE` was deleted as unused;
+`graph:review` is a first-class `Permission` that no agent holds; and `knowledge_gap`
+now receives real projected mastery because callers join `progress_events` and
+`quiz_attempts` through `learning.planner.load_mastery`.

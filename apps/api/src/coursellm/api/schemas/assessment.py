@@ -173,7 +173,9 @@ class AttemptResponse(BaseModel):
     answer: str | None
     score: float
     rubric: list[dict[str, Any]]
-    misconceptions: list[str]
+    # Typed objects, not JSON-encoded strings: the JSONB column now stores the
+    # misconception's fields directly, so a consumer no longer parses twice.
+    misconceptions: list[MisconceptionResponse]
     created_at: datetime
 
 

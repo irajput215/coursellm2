@@ -5,7 +5,7 @@ import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { ChatPage } from '@/pages/ChatPage'
-import { makeConversationDetail, sseChunk } from '@/test/handlers'
+import { sseChunk } from '@/test/handlers'
 import { renderWithProviders } from '@/test/render'
 import { server } from '@/test/server'
 
@@ -140,46 +140,24 @@ describe('chat streaming', () => {
     expect(screen.getAllByRole('button', { name: 'Retry' }).length).toBeGreaterThan(0)
   })
 
-  it('shows the degraded banner when the API reports a weakened answer', async () => {
-    server.use(
-      http.get('*/api/v1/chat/conversations', () =>
-        HttpResponse.json([
-          {
-            id: 'conv-1',
-            title: 'Eigenvalues',
-            course_id: null,
-            created_at: '2026-01-05T00:00:00Z',
-            updated_at: '2026-01-05T00:00:00Z',
-          },
-        ]),
-      ),
-      http.get('*/api/v1/chat/conversations/conv-1', () =>
-        HttpResponse.json(
-          makeConversationDetail({
-            id: 'conv-1',
-            messages: [
-              {
-                id: 'm-1',
-                role: 'assistant',
-                content: 'An eigenvalue scales its eigenvector.',
-                citations: [],
-                degraded: ['reranker_unavailable'],
-                grounded: true,
-                created_at: '2026-01-05T00:00:00Z',
-              },
-            ],
-          }),
-        ),
-      ),
-    )
-
+  it('shows the degraded banner when the terminal event reports a weakened answer', async () => {
+    // The SSE contract carries conversation_id, grounded and degraded on `done`,
+    // so no follow-up GET is needed to learn that the answer degraded.
     const handle = openStream()
     await sendQuestion(handle, 'Why is the answer weaker?')
     await push(
       handle,
       sseChunk(
         { event: 'token', data: JSON.stringify({ text: 'An eigenvalue scales.' }) },
-        { event: 'done', data: JSON.stringify({ proposed_actions: [] }) },
+        {
+          event: 'done',
+          data: JSON.stringify({
+            proposed_actions: [],
+            conversation_id: 'conv-1',
+            grounded: true,
+            degraded: ['reranker_unavailable'],
+          }),
+        },
       ),
     )
     await finish(handle)

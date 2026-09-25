@@ -19,10 +19,15 @@
 | **Metrics** | Request counts, error rates, per-layer latency histograms, token usage, cost, fallback and degradation rates, retrieval candidate counts, reranker score distribution, evaluation scores, cache hit ratio, active graph runs | Per-tenant business KPIs (enrolment, completion), provider status beyond our own error rate | Metrics must be bounded-cardinality and cheap; business KPIs are answered from the database, not from a metrics backend |
 | **Logs** | Structured JSON application logs with trace/request/tenant correlation, security events, degradation decisions, migration and startup events | Raw prompts, document text, PII, tool argument values | Logs are the searchable narrative; they must never become the place student content leaks (§6) |
 
-Honest scope statement: the instrumentation described here is **specified** in the code
-layout and configuration reference. Per-layer span emission for retrieval, rerank, graph
-nodes, and LLM calls is the target; where a layer is named below it is a requirement on
-that layer, not a report of an existing export.
+Honest scope statement: this document describes the target instrumentation. Emitted
+today are the HTTP server span (with the instrumentation's standard attributes only),
+`agent_graph` and its `node:*` children, the retrieval/fusion/rerank spans, `generation`,
+`output_validation`, `query_safety_scan`, `db.query` and `llm_call`. **Not yet emitted:**
+an `authentication` span, `tool:<name>` spans, ingestion spans, and the
+`coursellm.request_id` / `coursellm.tenant_id` / `coursellm.user_id` / `coursellm.stream`
+attributes on the server span. Those span names and attribute keys are declared in
+`observability/attributes.py` but unused, which is a promise the code does not keep yet;
+wiring them (or deleting the constants) is the next observability task.
 
 ---
 

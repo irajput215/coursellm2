@@ -9,7 +9,6 @@ dependency, so generation and grading are deterministic without a provider.
 
 from __future__ import annotations
 
-import json
 import re
 import uuid
 from collections.abc import Mapping
@@ -500,7 +499,8 @@ async def test_a_below_threshold_answer_writes_concept_struggled(
     assert len(attempts) == 1
     assert attempts[0]["rubric"]
     assert attempts[0]["misconceptions"]
-    payload = json.loads(attempts[0]["misconceptions"][0])
+    # Stored as a JSON object, not a JSON-encoded string: one parse, not two.
+    payload = attempts[0]["misconceptions"][0]
     assert payload["misconception_type"] == "attention_is_lookup"
     assert payload["citation_ids"] == ["S1"]
 

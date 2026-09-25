@@ -26,6 +26,7 @@ from coursellm.agents.state import (
 )
 from coursellm.core.config import Settings
 from coursellm.core.logging import get_logger
+from coursellm.llm import ModelTask, resolve_model
 
 logger = get_logger(__name__)
 
@@ -68,8 +69,10 @@ def make_student_context_node(
             grounded=False,
             models={
                 **(_metadata(state).get("models") or {}),
-                "agent_router": settings.resolved_agent_router_model,
-                "agent": settings.resolved_agent_model,
+                # The models the two routed tasks actually use, so a stored turn
+                # is attributable without a second, agent-specific model setting.
+                "agent_router": resolve_model(settings, ModelTask.CLASSIFICATION),
+                "agent": resolve_model(settings, ModelTask.REASONING),
             },
         )
         update = {

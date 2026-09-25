@@ -172,9 +172,36 @@ def _sort_key(citation_id: str) -> int:
     return int(digits) if digits.isdigit() else 0
 
 
+#: Default upper bound on the quote returned with a citation. Long enough to show
+#: the sentence an answer rests on, short enough that a response cannot page in a
+#: whole document through its citations.
+QUOTE_CHARS = 240
+
+
+def bounded_quote(text: str, *, limit: int = QUOTE_CHARS) -> str:
+    """A whitespace-collapsed, sentence-trimmed span of at most ``limit`` characters.
+
+    Trimming to a sentence boundary when one exists means the reader sees a
+    complete thought rather than a cut-off clause. The API applies this to every
+    citation, from both engines and from stored history, so the transport bound is
+    one definition rather than one per code path.
+    """
+    collapsed = " ".join(text.split())
+    if len(collapsed) <= limit:
+        return collapsed
+    window = collapsed[:limit]
+    boundary = max(window.rfind(". "), window.rfind("? "), window.rfind("! "))
+    if boundary >= limit // 3:
+        return window[: boundary + 1].strip()
+    # Leave room for the ellipsis so the result is at most ``limit`` characters.
+    return collapsed[: max(limit - 3, 0)].rstrip() + "..."
+
+
 __all__ = [
+    "QUOTE_CHARS",
     "REFUSAL_MARKER",
     "CitationReport",
+    "bounded_quote",
     "extract_citation_ids",
     "is_refusal",
     "strip_hallucinated",

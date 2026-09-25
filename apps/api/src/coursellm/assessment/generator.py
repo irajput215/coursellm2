@@ -31,7 +31,6 @@ from collections.abc import Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 
 from pydantic import ValidationError as PydanticValidationError
-from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from coursellm.assessment.schemas import (
@@ -54,8 +53,6 @@ from coursellm.assessment.schemas import (
 from coursellm.core.config import Settings
 from coursellm.core.errors import NotFoundError, ServiceUnavailableError, UpstreamError
 from coursellm.core.logging import get_logger
-from coursellm.db.models.content import Chunk
-from coursellm.db.models.graph import Concept, ConceptEdge
 from coursellm.db.tenancy import TenantScope
 from coursellm.graph.repository import ConceptGraphRepository
 from coursellm.llm import ChatMessage, LLMGateway, LLMRequest, ModelTask, resolve_model
@@ -132,7 +129,7 @@ async def generate_quiz(
         documents_by_id=await _documents_by_id(session, scope, ranking),
         settings=settings,
         token_counter=_counter(model),
-        chunk_positions=await _chunk_positions(session, scope, ranking),
+        chunk_positions=_chunk_positions(ranking),
     )
     linked = await citation_concept_links(
         session, scope, assembled=assembled, candidate_ids=set(candidates)
@@ -343,21 +340,12 @@ async def citation_concept_links(
 
     chunk_ids = [passage.chunk_id for passage in assembled.passages]
     document_ids = list({passage.document_id for passage in assembled.passages})
-    stmt = select(
-        ConceptEdge.source_concept_id,
-        ConceptEdge.target_concept_id,
-        ConceptEdge.provenance_chunk_id,
-        ConceptEdge.provenance_document_id,
-    ).where(
-        ConceptEdge.tenant_id == scope.tenant_id,
-        or_(
-            ConceptEdge.provenance_chunk_id.in_(chunk_ids),
-            ConceptEdge.provenance_document_id.in_(document_ids),
-        ),
+    edges = await ConceptGraphRepository(session, scope).provenance_edges_for(
+        chunk_ids=chunk_ids, document_ids=document_ids
     )
     by_chunk: dict[uuid.UUID, set[uuid.UUID]] = {}
     by_document: dict[uuid.UUID, set[uuid.UUID]] = {}
-    for source, target, chunk_id, document_id in (await session.execute(stmt)).all():
+    for source, target, chunk_id, document_id in edges:
         for concept_id in (source, target):
             if concept_id not in candidate_ids:
                 continue
@@ -451,19 +439,12 @@ async def _candidate_concepts(
     repo = ConceptGraphRepository(session, scope)
     resolved: dict[uuid.UUID, str] = {}
     if concept_ids:
-        for concept_id in concept_ids:
-            concept = await repo.get(concept_id)
-            if concept is not None:
-                resolved[concept.id] = concept.name
+        # One bulk read instead of one round trip per requested concept.
+        for concept_id, concept in (await repo.get_many(concept_ids)).items():
+            resolved[concept_id] = concept.name
         return resolved
 
-    stmt = (
-        select(Concept)
-        .where(Concept.tenant_id == scope.tenant_id, Concept.course_id == course_id)
-        .order_by(Concept.difficulty, Concept.name)
-        .limit(_MAX_CANDIDATE_CONCEPTS)
-    )
-    for concept in (await session.execute(stmt)).scalars():
+    for concept in await repo.concepts_for_course(course_id, limit=_MAX_CANDIDATE_CONCEPTS):
         resolved[concept.id] = concept.name
     return resolved
 
@@ -491,21 +472,19 @@ async def _documents_by_id(
     return loaded
 
 
-async def _chunk_positions(
-    session: AsyncSession, scope: TenantScope, ranking: RankingOutcome
-) -> dict[uuid.UUID, ChunkPosition]:
-    """Load chunk indices so adjacent chunks can be merged into continuous prose."""
-    chunk_ids = [passage.chunk_id for passage in ranking.results]
-    if not chunk_ids:
-        return {}
-    stmt = select(Chunk.id, Chunk.chunk_index, Chunk.starts_mid_sentence).where(
-        Chunk.tenant_id == scope.tenant_id,
-        Chunk.id.in_(chunk_ids),
-    )
-    rows = (await session.execute(stmt)).all()
+def _chunk_positions(ranking: RankingOutcome) -> dict[uuid.UUID, ChunkPosition]:
+    """Collect chunk positions already carried on the ranked passage.
+
+    No second query: ``SearchResult`` carries ``chunk_index`` and
+    ``starts_mid_sentence``, so adjacency is a projection rather than a read.
+    """
     return {
-        row.id: ChunkPosition(index=row.chunk_index, starts_mid_sentence=row.starts_mid_sentence)
-        for row in rows
+        passage.chunk_id: ChunkPosition(
+            index=passage.source.chunk_index,
+            starts_mid_sentence=passage.source.starts_mid_sentence,
+        )
+        for passage in ranking.results
+        if passage.source.chunk_index is not None
     }
 
 

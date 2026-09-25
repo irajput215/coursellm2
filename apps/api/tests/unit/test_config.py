@@ -205,3 +205,46 @@ class TestEnvironmentDefaults:
     def test_cache_ttl_default_is_bounded(self) -> None:
         configured = _settings()
         assert 0 < configured.cache_ttl_seconds <= 3600
+
+
+class TestWeightSetsAreValidatedAtStartup:
+    """A drifted weight set silently changes ranking or traversal.
+
+    Each set is a convex combination, so failing to sum to 1.0 is not a warning
+    sign in a score — it is a different function. The validators make it a boot
+    failure instead.
+    """
+
+    @pytest.mark.parametrize(
+        "override",
+        [
+            {"graph_w_base": 0.5},
+            {"graph_w_llm": 0.9},
+        ],
+        ids=["graph", "llm"],
+    )
+    def test_graph_weights_must_sum_to_one(self, override: dict[str, float]) -> None:
+        with pytest.raises(ValueError, match="confidence weights"):
+            _settings(**override)
+
+    def test_mastery_weights_must_sum_to_one(self) -> None:
+        with pytest.raises(ValueError, match="mastery weights"):
+            _settings(mastery_mean_weight=0.9)
+
+    def test_recommendation_weights_must_sum_to_one(self) -> None:
+        with pytest.raises(ValueError, match="recommendation weights"):
+            _settings(recommend_weight_coverage=0.9)
+
+    def test_graph_threshold_ordering_is_validated(self) -> None:
+        with pytest.raises(ValueError, match="GRAPH_REVIEW_FLOOR_CONFIDENCE"):
+            _settings(graph_review_floor_confidence=0.9, graph_auto_accept_confidence=0.5)
+
+    def test_the_promoted_weights_default_to_the_documented_values(self) -> None:
+        configured = _settings()
+        assert configured.graph_w_base == 0.15
+        assert configured.graph_w_llm == 0.25
+        assert configured.graph_w_corroboration == 0.30
+        assert configured.graph_w_cue == 0.20
+        assert configured.graph_w_agreement == 0.10
+        assert configured.mastery_mean_weight == 0.5
+        assert configured.recommend_weight_coverage == 0.55

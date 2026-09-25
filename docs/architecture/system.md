@@ -199,12 +199,13 @@ coursellm2/
 ├── infra/terraform/          AWS IaC: modules + dev/prod environments
 ├── docs/                     Audit, architecture, ADRs
 ├── scripts/                  Developer and CI helper scripts
-├── mcp_server/               MCP server exposing selected tools
-├── interview_prep/           Local-only interview notes (gitignored)
 ├── docker-compose.yml        Postgres + Redis + API + Web
 ├── Makefile                  Single entry point for every workflow
 └── .github/workflows/        CI, evaluation gate, security scan
 ```
+
+An MCP server exposing selected tools is planned but not present; the directory was
+empty and is not part of the tracked tree.
 
 Dependencies point inward: `api → services → domain → db/llm/rag`. Routers never
 contain business logic; domain code never imports FastAPI.

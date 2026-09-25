@@ -23,6 +23,7 @@ from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from coursellm.assessment.service import AssessmentService
 from coursellm.core import config as config_module
 from coursellm.core.config import Settings
 from coursellm.core.errors import AuthenticationError, ValidationError
@@ -38,6 +39,7 @@ from coursellm.security.ratelimit import (
     user_key,
 )
 from coursellm.security.tokens import decode_access_token
+from coursellm.services.roadmap import RoadmapService
 from coursellm.storage.base import ObjectStore
 from coursellm.storage.local import get_local_object_store
 
@@ -244,6 +246,31 @@ def get_user_repository(session: TenantSessionDep, context: ContextDep) -> UserR
 CourseRepositoryDep = Annotated[CourseRepository, Depends(get_course_repository)]
 DocumentRepositoryDep = Annotated[DocumentRepository, Depends(get_document_repository)]
 UserRepositoryDep = Annotated[UserRepository, Depends(get_user_repository)]
+
+
+# ---------------------------------------------------------------------------
+# Use-case services
+#
+# Resolved here rather than constructed inline in each router so the settings
+# the service's tunable weights come from are injected once, consistently, and
+# are substitutable in a test.
+# ---------------------------------------------------------------------------
+def get_roadmap_service(
+    session: TenantSessionDep, context: ContextDep, settings: SettingsDep
+) -> RoadmapService:
+    return RoadmapService(session, context, settings)
+
+
+RoadmapServiceDep = Annotated[RoadmapService, Depends(get_roadmap_service)]
+
+
+def get_assessment_service(
+    session: TenantSessionDep, context: ContextDep, settings: SettingsDep
+) -> AssessmentService:
+    return AssessmentService(session, context, settings)
+
+
+AssessmentServiceDep = Annotated[AssessmentService, Depends(get_assessment_service)]
 
 
 # ---------------------------------------------------------------------------

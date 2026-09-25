@@ -11,6 +11,7 @@ import pytest
 
 from coursellm.rag.generation.citations import (
     CitationReport,
+    bounded_quote,
     extract_citation_ids,
     is_refusal,
     strip_hallucinated,
@@ -115,3 +116,41 @@ def test_is_refusal_recognises_common_phrasings() -> None:
     assert is_refusal("There is insufficient evidence in the sources.")
     assert is_refusal("I cannot answer that from the provided material.")
     assert not is_refusal("Self attention mixes information across positions [S1].")
+
+
+class TestBoundedQuote:
+    """The API bound applied to every citation, from both engines and history."""
+
+    def test_a_short_span_is_whitespace_collapsed(self) -> None:
+        assert bounded_quote("  attention   weights\ninputs  ") == "attention weights inputs"
+
+    def test_a_long_span_is_trimmed_to_a_sentence_boundary(self) -> None:
+        first = "Attention mixes information across positions. "
+        text = first + "The rest of this passage is deliberately much longer " * 8
+        quote = bounded_quote(text, limit=120)
+        assert len(quote) <= 120
+        assert quote == first.strip()
+
+    def test_a_span_with_no_sentence_boundary_is_cut_and_marked(self) -> None:
+        quote = bounded_quote("x" * 500, limit=100)
+        assert len(quote) == 100  # at most the limit, ellipsis included
+        assert quote.endswith("...")
+
+    def test_the_default_limit_is_240(self) -> None:
+        assert len(bounded_quote("word " * 200)) <= 240
+
+    def test_citation_response_applies_the_bound_for_every_engine(self) -> None:
+        from uuid import uuid4
+
+        from coursellm.api.schemas.chat import CitationResponse
+
+        response = CitationResponse(
+            citation_id="S1",
+            chunk_id=uuid4(),
+            document_id=uuid4(),
+            filename="notes.txt",
+            page=1,
+            source_type="document",
+            quote="x" * 500,
+        )
+        assert len(response.quote) <= 240

@@ -1,12 +1,15 @@
 """Request and response schemas for chat.
 
-**What is deliberately absent.** Citations carry the identifiers a student needs
-to open the source (filename, page, document id), but not the quoted evidence
-text. Prompts, the assembled evidence region and the provider model name are not
-part of any response either: they are internal, they can contain other students'
-material by proxy, and publishing the model name would invite provider-specific
-requests the router does not honour. Usage is summarised as token counts only,
-which is what a cost/limit display needs.
+**What is deliberately absent.** Prompts, the assembled evidence region and the
+provider model name are not part of any response: they are internal, they can
+contain other students' material by proxy, and publishing the model name would
+invite provider-specific requests the router does not honour. Usage is summarised
+as token counts only, which is what a cost/limit display needs.
+
+**Citations carry a bounded quote.** A citation a reader cannot check is a weak
+citation, so each one includes a short, sentence-trimmed span of the passage it
+points at. It is bounded here at the transport edge; the requester owns the
+documents, so exposing their own passage back to them is not a disclosure.
 """
 
 from __future__ import annotations
@@ -15,9 +18,10 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from coursellm.db.models.conversation import MessageRole
+from coursellm.rag.generation.citations import bounded_quote
 from coursellm.tools.registry import ProposedAction
 
 # The service enforces ``settings.max_query_chars``; this bound is a transport
@@ -51,7 +55,7 @@ class ChatRequest(BaseModel):
 
 
 class CitationResponse(BaseModel):
-    """A resolvable citation. The quoted span is intentionally not exposed."""
+    """A resolvable citation, with the passage span it points at."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -61,6 +65,20 @@ class CitationResponse(BaseModel):
     filename: str
     page: int | None
     source_type: str
+    #: A short span of the cited passage, so the reader can check the answer
+    #: without opening the document. Empty when the source carried no text.
+    quote: str = ""
+
+    @field_validator("quote")
+    @classmethod
+    def _bound_quote(cls, value: str) -> str:
+        """Apply the transport bound to every citation, whatever produced it.
+
+        The stored span is longer (assembly writes up to 280 chars); bounding at
+        the schema means the chat response and `GET /chat/conversations/{id}`
+        return the same shape for both engines.
+        """
+        return bounded_quote(value)
 
 
 class UsageSummary(BaseModel):

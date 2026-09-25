@@ -176,21 +176,50 @@ class Settings(BaseSettings):
     # -- Knowledge graph ----------------------------------------------------
     graph_extraction_enabled: bool = True
     graph_extraction_model: str = ""
-    graph_min_edge_confidence: float = Field(default=0.55, ge=0.0, le=1.0)
     graph_max_extraction_chunks_per_document: int = Field(default=200, ge=1)
+    graph_max_edges_per_chunk: int = Field(default=20, ge=1)
+    graph_max_edges_per_document: int = Field(default=200, ge=1)
+    graph_cross_course_edges: bool = False
+    # Prompt revision recorded on every extracted concept and edge, and hashed
+    # into `extraction_config_version` (knowledge-graph.md section 12).
+    graph_extraction_prompt_version: str = "graph-extract-v1"
     # Traversal bound for `search_knowledge_graph` closures. Never a `related_to`
     # hop: a closure is prerequisite-only (knowledge-graph.md section 4).
     graph_max_depth: int = Field(default=3, ge=1, le=10)
-    graph_min_traversable_confidence: float = Field(default=0.55, ge=0.0, le=1.0)
+    graph_min_traversable_confidence: float = Field(default=0.60, ge=0.0, le=1.0)
     graph_statement_timeout_ms: int = Field(default=1500, ge=100, le=30_000)
+    # Confidence model (knowledge-graph.md section 6/12). Promoting these from
+    # module constants is what lets the evaluation harness vary them per run
+    # without a code change; the sum-to-one check below keeps a drifted set from
+    # silently changing which edges are traversable.
+    graph_llm_confidence_cap: float = Field(default=0.80, ge=0.0, le=1.0)
+    graph_auto_accept_confidence: float = Field(default=0.75, ge=0.0, le=1.0)
+    graph_review_floor_confidence: float = Field(default=0.50, ge=0.0, le=1.0)
+    graph_w_base: float = 0.15
+    graph_w_llm: float = 0.25
+    graph_w_corroboration: float = 0.30
+    graph_w_cue: float = 0.20
+    graph_w_agreement: float = 0.10
+
+    # -- Mastery projection -------------------------------------------------
+    # Weights of the three readings combined into `project_mastery`
+    # (learning/progress.py). They must sum to 1.0.
+    mastery_mean_weight: float = 0.5
+    mastery_best_weight: float = 0.3
+    mastery_latest_weight: float = 0.2
+
+    # -- Recommendation ranking ---------------------------------------------
+    # Weights of the four contributions to a resource's fit score
+    # (recommend/ranking.py). They must sum to 1.0.
+    recommend_weight_coverage: float = 0.55
+    recommend_weight_difficulty: float = 0.20
+    recommend_weight_trust: float = 0.15
+    recommend_weight_recency: float = 0.10
+    recommend_min_gap_weight: float = Field(default=0.1, gt=0.0, le=1.0)
 
     # -- Agents and the LangGraph layer -------------------------------------
-    # Reasoning model for the five agent nodes. Empty means "use the task
-    # routing in coursellm.llm.routing"; set explicitly to pin a deployment.
-    agent_model: str = ""
-    agent_fallback_model: str = ""
-    # The cheap model used by `intent_router` only. Empty means the fast model.
-    agent_router_model: str = ""
+    # Agent temperature for the reasoning nodes; the generator's own
+    # temperature is `llm_temperature`.
     agent_temperature: float = Field(default=0.1, ge=0.0, le=2.0)
     # Loop and cost ceilings (agent-architecture.md section 9). Every breach
     # exits at `answer_composer`, never with an error.
@@ -282,6 +311,8 @@ class Settings(BaseSettings):
             )
             raise ValueError(msg)
 
+        self._validate_weight_sets()
+
         if self.environment is Environment.PROD:
             if self.secret_key.strip().lower() in _PLACEHOLDER_SECRETS:
                 msg = (
@@ -307,6 +338,61 @@ class Settings(BaseSettings):
                 raise ValueError(msg)
 
         return self
+
+    def _validate_weight_sets(self) -> None:
+        """Reject a drifted weight set at startup rather than at first use.
+
+        Each set is a weighted sum: if the weights no longer sum to 1.0 the
+        score is no longer a convex combination of its signals, which silently
+        changes ranking or traversal. Checking here means a bad deployment fails
+        loudly at boot, and the threshold ordering is checked with it.
+        """
+        tolerance = 1e-9
+        graph_total = (
+            self.graph_w_base
+            + self.graph_w_llm
+            + self.graph_w_corroboration
+            + self.graph_w_cue
+            + self.graph_w_agreement
+        )
+        if abs(graph_total - 1.0) > tolerance:
+            msg = (
+                "The knowledge-graph confidence weights (GRAPH_W_*) must sum to 1.0; "
+                f"got {graph_total!r}."
+            )
+            raise ValueError(msg)
+        if (
+            not 0.0
+            <= self.graph_review_floor_confidence
+            <= self.graph_auto_accept_confidence
+            <= 1.0
+        ):
+            msg = (
+                "GRAPH_REVIEW_FLOOR_CONFIDENCE must be <= GRAPH_AUTO_ACCEPT_CONFIDENCE; "
+                f"got {self.graph_review_floor_confidence!r} > "
+                f"{self.graph_auto_accept_confidence!r}."
+            )
+            raise ValueError(msg)
+
+        mastery_total = (
+            self.mastery_mean_weight + self.mastery_best_weight + self.mastery_latest_weight
+        )
+        if abs(mastery_total - 1.0) > tolerance:
+            msg = f"The mastery weights (MASTERY_*_WEIGHT) must sum to 1.0; got {mastery_total!r}."
+            raise ValueError(msg)
+
+        recommendation_total = (
+            self.recommend_weight_coverage
+            + self.recommend_weight_difficulty
+            + self.recommend_weight_trust
+            + self.recommend_weight_recency
+        )
+        if abs(recommendation_total - 1.0) > tolerance:
+            msg = (
+                "The recommendation weights (RECOMMEND_WEIGHT_*) must sum to 1.0; "
+                f"got {recommendation_total!r}."
+            )
+            raise ValueError(msg)
 
     @model_validator(mode="after")
     def _derive_graph_recursion_limit(self) -> Settings:
@@ -356,24 +442,6 @@ class Settings(BaseSettings):
         """Model used for knowledge-graph extraction, defaulting to the fast model."""
         return self.graph_extraction_model.strip() or self.fast_model
 
-    @computed_field  # type: ignore[prop-decorator]
-    @property
-    def resolved_agent_model(self) -> str:
-        """Model recorded for the five agent nodes, defaulting to the reasoning route.
-
-        The gateway still selects the provider model by :class:`~coursellm.llm.types.ModelTask`
-        (see :mod:`coursellm.llm.routing`); this value is what the agent layer
-        records in ``evaluation_metadata.models`` so a turn is attributable to a
-        model revision.
-        """
-        return self.agent_model.strip() or self.reasoning_model
-
-    @computed_field  # type: ignore[prop-decorator]
-    @property
-    def resolved_agent_router_model(self) -> str:
-        """Model recorded for ``intent_router``, defaulting to the fast model."""
-        return self.agent_router_model.strip() or self.fast_model
-
     @property
     def retrieval_config_version(self) -> str:
         """Stable hash of every setting that can change retrieval results.
@@ -394,6 +462,9 @@ class Settings(BaseSettings):
             "rerank_enabled": self.rerank_enabled,
             "reranker_model": self.reranker_model,
             "rerank_top_k": self.rerank_top_k,
+            # The floor drops passages *after* reranking, so it changes the
+            # result set and must move the hash with the other rerank settings.
+            "rerank_min_score": self.rerank_min_score,
             "context_token_budget": self.context_token_budget,
             "metadata_filtering_enabled": self.metadata_filtering_enabled,
         }

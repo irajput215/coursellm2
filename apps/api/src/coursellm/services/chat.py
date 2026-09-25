@@ -18,10 +18,10 @@ Two rules are enforced at this level.
 * **The question is validated before any retrieval happens.** An over-long query
   is rejected with a domain ``ValidationError`` rather than being embedded and
   searched.
-* **A refused question is still conversation history.** The user and assistant
-  messages are written in the same transaction whether or not evidence was
-  found, so the transcript is complete and auditable. Each turn writes exactly
-  one user row and one assistant row, whichever engine ran it.
+* **A question asked is conversation history.** The user message is committed
+  before generation runs, so a hard failure rolls back only the answer and the
+  question remains visible. Each turn writes exactly one user row and one
+  assistant row, whichever engine ran it.
 """
 
 from __future__ import annotations
@@ -50,15 +50,16 @@ from coursellm.agents.state import (
 from coursellm.core.config import Settings
 from coursellm.core.errors import NotFoundError, SafetyError, ValidationError
 from coursellm.core.logging import get_logger
-from coursellm.db.models.content import Chunk, SourceType
+from coursellm.db.models.content import SourceType
 from coursellm.db.models.conversation import Conversation, Message, MessageRole
-from coursellm.db.tenancy import TenantContext, TenantScope
+from coursellm.db.tenancy import TenantContext, TenantScope, set_tenant_guc
 from coursellm.learning.planner import load_mastery
-from coursellm.learning.progress import weak_concepts
+from coursellm.learning.progress import mastery_weights, weak_concepts
 from coursellm.llm import ChatMessage, LLMGateway, LLMResponse, ModelTask, resolve_model
 from coursellm.llm.cost import count_tokens
 from coursellm.observability import tracing
 from coursellm.prompts.loader import PromptLibrary
+from coursellm.rag.generation.citations import bounded_quote
 from coursellm.rag.generation.context import (
     AssembledContext,
     ChunkPosition,
@@ -264,11 +265,11 @@ async def _ask_agent(
         # The graph is given the request's own tenant-scoped session, so every
         # repository read and every tool handler it reaches inherits Row-Level
         # Security rather than opening its own connection.
-        progress_provider=_progress_provider(session),
+        progress_provider=_progress_provider(session, settings),
     )
     return ChatAnswer(
         answer=turn.answer,
-        citations=await _agent_citations(session, context, turn.citations),
+        citations=await _agent_citations(session, context, turn.citations, state=turn.state),
         grounded=turn.grounded,
         degraded=turn.degraded,
         conversation_id=turn.conversation_id,
@@ -280,7 +281,7 @@ async def _ask_agent(
     )
 
 
-def _progress_provider(session: AsyncSession) -> ProgressProvider:
+def _progress_provider(session: AsyncSession, settings: Settings) -> ProgressProvider:
     """A progress reader over the caller's tenant-scoped session.
 
     The graph's ``get_student_progress`` tool projects ``state["student_progress"]``,
@@ -295,7 +296,12 @@ def _progress_provider(session: AsyncSession) -> ProgressProvider:
         user_id = state.get("user_id")
         if user_id is None:
             return empty_progress(course_id)
-        mastery = await load_mastery(session, TenantScope(state["tenant_id"]), user_id=user_id)
+        mastery = await load_mastery(
+            session,
+            TenantScope(state["tenant_id"]),
+            user_id=user_id,
+            weights=mastery_weights(settings),
+        )
         return StudentProgress(
             course_id=str(course_id) if course_id is not None else None,
             mastery={str(concept_id): value for concept_id, value in mastery.items()},
@@ -312,15 +318,23 @@ async def _agent_citations(
     session: AsyncSession,
     context: TenantContext,
     citations: Sequence[AgentCitation],
+    *,
+    state: ConversationState | None = None,
 ) -> list[Citation]:
     """Rehydrate the graph's typed citations into the display citation model.
 
     ``ConversationState`` carries the citation identifiers and page but not the
     filename (it is not needed to ground an answer), so the filename is read back
-    through the document repository, under the same tenancy as the turn.
+    through the document repository, under the same tenancy as the turn. The
+    quoted span is taken from the passed-back ``retrieved_documents`` — the
+    evidence the answer actually rested on — rather than re-read from the chunk.
     """
     documents = DocumentRepository(session, context)
     filenames: dict[uuid.UUID, str] = {}
+    quotes = {
+        document["citation_id"]: bounded_quote(document["content"])
+        for document in (state or {}).get("retrieved_documents") or []
+    }
     result: list[Citation] = []
     for citation in citations:
         document_id = uuid.UUID(citation["document_id"])
@@ -337,7 +351,7 @@ async def _agent_citations(
                 filename=filename,
                 page=citation["page"],
                 source_type=_agent_source_type(citation["source_type"]),
-                quote="",
+                quote=quotes.get(citation["citation_id"], ""),
             )
         )
     return result
@@ -399,7 +413,7 @@ async def prepare_turn(
     model = resolve_model(settings, ModelTask.TUTORING)
     counter = _counter(model)
     documents_by_id = await _documents_by_id(session, context, ranking)
-    chunk_positions = await _chunk_positions(session, context, ranking)
+    chunk_positions = _chunk_positions(ranking)
     assembled = assemble(
         ranking.results,
         documents_by_id=documents_by_id,
@@ -409,25 +423,18 @@ async def prepare_turn(
     )
 
     session.add(
-        Message(
-            tenant_id=context.tenant_id,
+        user_message(
+            context,
+            settings,
             conversation_id=conversation.id,
-            role=MessageRole.USER,
-            content=question,
-            citations=[],
-            degraded=[],
-            grounded=False,
-            token_count=counter(question),
-            retrieval_config_version=settings.retrieval_config_version,
-            # ``created_at`` is set explicitly rather than left to the server
-            # default: both messages of a turn are written in one transaction, and
-            # ``now()`` is the transaction timestamp, so server defaults would
-            # make the user and assistant rows indistinguishable in time and the
-            # transcript would not be reproducibly ordered.
+            question=question,
             created_at=_utcnow(),
         )
     )
     await session.flush()
+    # The question is committed before generation. From here on a failure rolls
+    # back only the answer, which is the transcript the module docstring promises.
+    await commit_turn(session, context)
 
     return PreparedTurn(
         conversation_id=conversation.id,
@@ -443,6 +450,53 @@ async def prepare_turn(
 def build_generator(settings: Settings, gateway: LLMGateway) -> AnswerGenerator:
     """Construct the generator with the settings' prompt library."""
     return AnswerGenerator(settings, gateway, PromptLibrary(settings))
+
+
+def user_message(
+    context: TenantContext,
+    settings: Settings,
+    *,
+    conversation_id: uuid.UUID,
+    question: str,
+    created_at: datetime,
+) -> Message:
+    """Build the user-turn row, identically for both engines.
+
+    One factory rather than a copy in each service so the transcript columns
+    (token count, config version, empty citation/degradation lists) cannot drift
+    between the graph path and the direct path.
+    """
+    return Message(
+        tenant_id=context.tenant_id,
+        conversation_id=conversation_id,
+        role=MessageRole.USER,
+        content=question,
+        citations=[],
+        degraded=[],
+        grounded=False,
+        token_count=count_tokens(question, resolve_model(settings, ModelTask.TUTORING)),
+        retrieval_config_version=settings.retrieval_config_version,
+        # ``created_at`` is set explicitly rather than left to the server default:
+        # both messages of a turn are written in one transaction, and ``now()`` is
+        # the transaction timestamp, so server defaults would make the user and
+        # assistant rows indistinguishable in time and the transcript would not be
+        # reproducibly ordered.
+        created_at=created_at,
+    )
+
+
+async def commit_turn(session: AsyncSession, context: TenantContext) -> None:
+    """Commit the current turn's writes and keep the tenancy GUC in force.
+
+    The question is committed *before* generation runs, so a hard failure rolls
+    back only the answer: a question that was asked is history (``services/chat``
+    module docstring). ``set_config(..., is_local => true)`` is
+    transaction-scoped, so a commit clears the tenancy variable; re-applying it
+    immediately keeps Row-Level Security active for whatever the rest of the
+    request writes, including the graph's tool calls.
+    """
+    await session.commit()
+    await set_tenant_guc(session, context.tenant_id)
 
 
 async def persist_assistant_message(
@@ -494,6 +548,11 @@ async def persist_assistant_message(
     )
     session.add(message)
     await session.flush()
+    # The assistant row is committed here, not by the request dependency: the
+    # question's own ``commit_turn`` already ended the dependency's transaction,
+    # so the dependency has nothing left to commit and the answer would be rolled
+    # back on teardown without this.
+    await commit_turn(session, context)
     return message
 
 
@@ -700,25 +759,21 @@ async def _documents_by_id(
     return result
 
 
-async def _chunk_positions(
-    session: AsyncSession, context: TenantContext, ranking: RankingOutcome
-) -> dict[uuid.UUID, ChunkPosition]:
-    """Load chunk indices so adjacent chunks can be merged into continuous prose.
+def _chunk_positions(ranking: RankingOutcome) -> dict[uuid.UUID, ChunkPosition]:
+    """Collect chunk positions so adjacent chunks can be merged into prose.
 
-    ``SearchResult`` carries the passage text but not its position inside the
-    document, so adjacency is resolved here, where a session is available.
+    ``SearchResult`` carries ``chunk_index`` and ``starts_mid_sentence``, so this
+    is a projection of data already in hand rather than a second query per turn.
+    A ``None`` index (a retriever that did not populate it) simply means the
+    passage is not merged.
     """
-    chunk_ids = [passage.chunk_id for passage in ranking.results]
-    if not chunk_ids:
-        return {}
-    statement = select(Chunk.id, Chunk.chunk_index, Chunk.starts_mid_sentence).where(
-        Chunk.tenant_id == context.tenant_id,
-        Chunk.id.in_(chunk_ids),
-    )
-    rows = (await session.execute(statement)).all()
     return {
-        row.id: ChunkPosition(index=row.chunk_index, starts_mid_sentence=row.starts_mid_sentence)
-        for row in rows
+        passage.chunk_id: ChunkPosition(
+            index=passage.source.chunk_index,
+            starts_mid_sentence=passage.source.starts_mid_sentence,
+        )
+        for passage in ranking.results
+        if passage.source.chunk_index is not None
     }
 
 
@@ -757,10 +812,12 @@ __all__ = [
     "PreparedTurn",
     "ask",
     "build_generator",
+    "commit_turn",
     "confirm_proposal",
     "persist_assistant_message",
     "prepare_turn",
     "screen_query",
     "unique",
+    "user_message",
     "validate_question",
 ]

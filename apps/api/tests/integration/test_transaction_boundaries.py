@@ -13,10 +13,10 @@ The four boundaries:
    ``documents`` row and no stored object. The prototype committed the row first
    and embedded afterwards, so a failed ingest left a visible document and a
    stray file whose retry failed on the unique ``(tenant, course, sha256)`` key.
-2. **A failed turn.** ``services.agent.run_turn`` stages the user message and
-   then runs the graph. A question was asked whether or not the answer was
-   produced, so the row must survive the failure. (See
-   :class:`TestAFailedTurnStillRecordsTheQuestion` for the current behaviour.)
+2. **A failed turn.** ``services.agent.run_turn`` commits the user message
+   before it runs the graph. A question was asked whether or not the answer was
+   produced, so the row survives the failure and only the assistant row is
+   rolled back (see :class:`TestAFailedTurnStillRecordsTheQuestion`).
 3. **A failed evaluation.** ``assessment.evaluator.evaluate_answer`` writes a
    ``progress_events`` row and flushes it. A failure after that flush must not
    leave a partial event, and an ungraded attempt must leave no attempt row that
@@ -326,29 +326,12 @@ class _BrokenGraph:
 class TestAFailedTurnStillRecordsTheQuestion:
     """The requirement: a question asked is history even when the answer fails.
 
-    The current implementation stages the user message inside the request's
-    single transaction and then runs the graph in that same transaction, so an
-    unhandled failure rolls the question back with the answer. That is the
-    opposite of the documented intent (``services/chat.py`` module docstring:
-    "the transcript is complete and auditable"), and it is asserted here as the
-    *desired* behaviour so the defect is visible.
-
-    This test is expected to fail until the user message gets its own commit
-    boundary. It is a real finding, not a weakened assertion: see
-    ``apps/api/tests/COVERAGE.md`` and the PR notes for the source change it
-    requires.
-
-    ``strict=True`` is deliberate. The suite stays green today because the
-    defect is known, and the moment someone fixes the boundary this test fails
-    as an ``XPASS`` and forces the marker to be removed. A soft xfail would let
-    a genuine fix pass unnoticed.
+    ``services/agent.run_turn`` (and ``services/chat.prepare_turn``) commit the
+    user message before generation runs, so an unhandled failure rolls back only
+    the answer. That is the documented intent (``services/chat.py`` module
+    docstring: "the transcript is complete and auditable").
     """
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="known defect: the user message shares the turn's transaction, so a hard "
-        "graph failure rolls the question back with the answer (needs its own commit)",
-    )
     async def test_the_user_message_survives_a_hard_generation_failure(
         self,
         tx_settings: Settings,

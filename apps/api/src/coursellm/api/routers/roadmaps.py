@@ -20,8 +20,8 @@ from fastapi import APIRouter, Query, Response, status
 from coursellm.api.deps import (
     ContextDep,
     LLMGatewayDep,
+    RoadmapServiceDep,
     SettingsDep,
-    TenantSessionDep,
 )
 from coursellm.api.schemas.roadmap import (
     NextActionResponse,
@@ -38,7 +38,6 @@ from coursellm.db.models.learning import RoadmapStepStatus
 from coursellm.services.roadmap import (
     ProgressOverview,
     RoadmapDetail,
-    RoadmapService,
 )
 
 router = APIRouter(prefix="/roadmaps", tags=["roadmaps"])
@@ -89,12 +88,12 @@ def _progress_response(overview: ProgressOverview) -> ProgressOverviewResponse:
 async def create_roadmap(
     payload: RoadmapCreateRequest,
     context: ContextDep,
-    session: TenantSessionDep,
+    roadmap_service: RoadmapServiceDep,
     settings: SettingsDep,
     gateway: LLMGatewayDep,
     response: Response,
 ) -> RoadmapDetailResponse:
-    service = RoadmapService(session, context)
+    service = roadmap_service
     roadmap, _plan, created = await service.create_or_reuse(
         user_id=context.user_id,
         settings=settings,
@@ -119,10 +118,10 @@ async def create_roadmap(
 )
 async def list_roadmaps(
     context: ContextDep,
-    session: TenantSessionDep,
+    roadmap_service: RoadmapServiceDep,
     course_id: Annotated[uuid.UUID | None, Query()] = None,
 ) -> list[RoadmapResponse]:
-    service = RoadmapService(session, context)
+    service = roadmap_service
     rows = await service.list_latest(user_id=context.user_id, course_id=course_id)
     return [RoadmapResponse.model_validate(row) for row in rows]
 
@@ -139,9 +138,9 @@ async def list_roadmaps(
 async def get_roadmap(
     roadmap_id: uuid.UUID,
     context: ContextDep,
-    session: TenantSessionDep,
+    roadmap_service: RoadmapServiceDep,
 ) -> RoadmapDetailResponse:
-    service = RoadmapService(session, context)
+    service = roadmap_service
     detail = await service.get_detail(roadmap_id=roadmap_id, user_id=context.user_id)
     return _detail_response(detail)
 
@@ -160,10 +159,10 @@ async def adapt_roadmap(
     roadmap_id: uuid.UUID,
     payload: RoadmapAdaptRequest,
     context: ContextDep,
-    session: TenantSessionDep,
+    roadmap_service: RoadmapServiceDep,
     settings: SettingsDep,
 ) -> RoadmapDetailResponse:
-    service = RoadmapService(session, context)
+    service = roadmap_service
     detail = await service.adapt_roadmap(
         roadmap_id=roadmap_id,
         user_id=context.user_id,
@@ -188,9 +187,9 @@ async def update_step(
     step_id: uuid.UUID,
     payload: RoadmapStepUpdateRequest,
     context: ContextDep,
-    session: TenantSessionDep,
+    roadmap_service: RoadmapServiceDep,
 ) -> RoadmapDetailResponse:
-    service = RoadmapService(session, context)
+    service = roadmap_service
     detail = await service.update_step(
         roadmap_id=roadmap_id,
         user_id=context.user_id,
@@ -212,10 +211,10 @@ async def update_step(
 )
 async def get_progress(
     context: ContextDep,
-    session: TenantSessionDep,
+    roadmap_service: RoadmapServiceDep,
     course_id: Annotated[uuid.UUID | None, Query()] = None,
 ) -> ProgressOverviewResponse:
-    service = RoadmapService(session, context)
+    service = roadmap_service
     overview = await service.progress_overview(user_id=context.user_id, course_id=course_id)
     return _progress_response(overview)
 

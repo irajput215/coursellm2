@@ -6,7 +6,9 @@ Transport only. Retrieval, assembly, generation and persistence live in
 The streaming endpoint emits named SSE events in a fixed order — ``token`` ...
 ``citations`` then ``done`` — with an ``error`` event on failure. A client can
 therefore render partial text immediately and only treat the ``citations`` event
-as authoritative.
+as authoritative. The ``done`` event carries ``conversation_id``, ``grounded``
+and ``degraded`` so the client never needs a follow-up ``GET`` to reconcile the
+turn's identity or its degradation banner.
 """
 
 from __future__ import annotations
@@ -242,7 +244,16 @@ async def stream_chat(
                     [citation.model_dump(mode="json") for citation in completion.citations]
                 ),
             }
-            yield {"event": "done", "data": "{}"}
+            yield {
+                "event": "done",
+                "data": _encode(
+                    {
+                        "conversation_id": str(prepared.conversation_id),
+                        "grounded": completion.grounded,
+                        "degraded": degraded,
+                    }
+                ),
+            }
         except Exception:
             # The response has already started, so the error cannot become a JSON
             # status code; it becomes an SSE event the client can surface instead.
@@ -264,9 +275,12 @@ async def _agent_events(result: chat_service.ChatAnswer) -> AsyncIterator[dict[s
             "event": "done",
             "data": _encode(
                 {
+                    "conversation_id": str(result.conversation_id),
+                    "grounded": result.grounded,
+                    "degraded": result.degraded,
                     "proposed_actions": [
                         action.model_dump(mode="json") for action in result.proposed_actions
-                    ]
+                    ],
                 }
             ),
         }

@@ -51,6 +51,7 @@ from coursellm.db.models.graph import (
 from coursellm.db.tenancy import TenantScope
 from coursellm.graph.confidence import (
     GRAPH_REVIEW_FLOOR_CONFIDENCE,
+    ConfidenceWeights,
     Cue,
     EdgeDisposition,
     score_edge,
@@ -70,24 +71,42 @@ from coursellm.graph.schemas import (
 from coursellm.llm.gateway import LLMGateway
 from coursellm.llm.types import ChatMessage, LLMRequest, ModelTask
 from coursellm.rag.generation.context import EVIDENCE_CLOSE_TAG, EVIDENCE_OPEN_TAG
+from coursellm.security.sanitize import neutralise_markers
 
 logger = get_logger(__name__)
 
-#: Prompt revision recorded on every run and every row it writes. Configuration
-#: would own this in a deployment (``GRAPH_EXTRACTION_PROMPT_VERSION``); the
-#: literal keeps a run attributable without one.
-PROMPT_VERSION = "graph-extract-v1"
-#: Extraction configuration knobs that are not yet on ``Settings``.
+#: Defaults for the extraction knobs when a caller does not pass one. The
+#: application reads these from :class:`~coursellm.core.config.Settings`
+#: (``GRAPH_*``); the literals keep the pure gate functions usable without one.
 MAX_EDGES_PER_CHUNK = 20
 MAX_EDGES_PER_DOCUMENT = 200
 ALLOW_CROSS_COURSE_EDGES = False
 MIN_QUOTE_CHARS = 10
 
-# The reserved evidence delimiters. A chunk containing one is neutralised before
-# it is placed in the prompt, so document text cannot close the region early and
-# escape into instruction position.
-_RESERVED_TAG_RE = re.compile(r"</?untrusted_evidence[^>]*>", re.IGNORECASE)
-_RESERVED_PREFIX_RE = re.compile(r"</?untrusted_evidence", re.IGNORECASE)
+
+def confidence_weights(settings: Settings) -> ConfidenceWeights:
+    """The confidence model's weights and thresholds, from configuration.
+
+    Built per extraction run rather than cached so a test that constructs
+    :class:`Settings` with different weights sees them take effect, which is the
+    whole point of promoting them from module constants.
+    """
+    return ConfidenceWeights(
+        base=settings.graph_w_base,
+        llm=settings.graph_w_llm,
+        corroboration=settings.graph_w_corroboration,
+        cue=settings.graph_w_cue,
+        agreement=settings.graph_w_agreement,
+        llm_cap=settings.graph_llm_confidence_cap,
+        auto_accept=settings.graph_auto_accept_confidence,
+        review_floor=settings.graph_review_floor_confidence,
+        min_traversable=settings.graph_min_traversable_confidence,
+    )
+
+
+# The reserved evidence delimiters are neutralised by the same helper the
+# generation path uses (:mod:`coursellm.security.sanitize`), so a partially
+# formed ``<untrusted_evidence`` cannot survive in either prompt.
 _WHITESPACE_RE = re.compile(r"\s+")
 _BULLET_START_RE = re.compile(r"^\d+[.)]\s")
 _WORD_RE = re.compile(r"[A-Za-z]{3,}")
@@ -398,10 +417,12 @@ def select_chunks(chunks: Sequence[Chunk], *, max_chunks: int) -> list[Chunk]:
 
 def _neutralise(content: str) -> str:
     """Remove reserved markers so document text cannot close the region early."""
-    return _RESERVED_PREFIX_RE.sub("", _RESERVED_TAG_RE.sub("", content))
+    return neutralise_markers(content)
 
 
-def build_extraction_messages(chunk: Chunk) -> list[ChatMessage]:
+def build_extraction_messages(
+    chunk: Chunk, *, max_relations: int = MAX_EDGES_PER_CHUNK
+) -> list[ChatMessage]:
     """Build the two-message extraction request for one chunk.
 
     The chunk text is placed inside the same ``<untrusted_evidence>`` region the
@@ -417,7 +438,7 @@ def build_extraction_messages(chunk: Chunk) -> list[ChatMessage]:
     return [
         ChatMessage(
             role="system",
-            content=SYSTEM_PROMPT.format(max_relations=MAX_EDGES_PER_CHUNK),
+            content=SYSTEM_PROMPT.format(max_relations=max_relations),
         ),
         ChatMessage(
             role="user",
@@ -427,13 +448,29 @@ def build_extraction_messages(chunk: Chunk) -> list[ChatMessage]:
 
 
 def _config_version(settings: Settings) -> str:
+    """Hash of every knob that can change which edges an extraction writes.
+
+    The weight set is included, not just the model and prompt version: two runs
+    under different weights can auto-accept different edges, so a quality shift
+    must be attributable to the weights as much as to the model.
+    """
     payload = {
         "model": settings.graph_model,
-        "prompt_version": PROMPT_VERSION,
+        "prompt_version": settings.graph_extraction_prompt_version,
         "max_chunks": settings.graph_max_extraction_chunks_per_document,
-        "max_edges_per_chunk": MAX_EDGES_PER_CHUNK,
-        "max_edges_per_document": MAX_EDGES_PER_DOCUMENT,
-        "cross_course": ALLOW_CROSS_COURSE_EDGES,
+        "max_edges_per_chunk": settings.graph_max_edges_per_chunk,
+        "max_edges_per_document": settings.graph_max_edges_per_document,
+        "cross_course": settings.graph_cross_course_edges,
+        "weights": {
+            "base": settings.graph_w_base,
+            "llm": settings.graph_w_llm,
+            "corroboration": settings.graph_w_corroboration,
+            "cue": settings.graph_w_cue,
+            "agreement": settings.graph_w_agreement,
+        },
+        "llm_confidence_cap": settings.graph_llm_confidence_cap,
+        "auto_accept": settings.graph_auto_accept_confidence,
+        "review_floor": settings.graph_review_floor_confidence,
     }
     digest = hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
@@ -518,7 +555,7 @@ async def _resolve_or_create_concept(
         provenance_chunk_id=extracted.source_chunk_id,
         provenance_page=chunk.page,
         extraction_run_id=run.id,
-        prompt_version=PROMPT_VERSION,
+        prompt_version=settings.graph_extraction_prompt_version,
         model=settings.graph_model,
         confidence=extracted.confidence,
         verified=False,
@@ -595,6 +632,8 @@ async def _resolve_endpoint(
 async def _score_edge(
     repo: ConceptGraphRepository,
     evidence: _EdgeEvidence,
+    *,
+    weights: ConfidenceWeights,
 ) -> tuple[float, EdgeDisposition, str, bool]:
     """Score accumulated evidence against the existing graph.
 
@@ -635,6 +674,7 @@ async def _score_edge(
         verified_same_relation=verified_same,
         path_exists=path_exists,
         verified_opposite=verified_opposite,
+        weights=weights,
     )
     return score.score, score.disposition, cue_value, verified_same or verified_opposite
 
@@ -647,24 +687,36 @@ async def extract_from_chunks(
     document: Document,
     chunks: Sequence[Chunk],
     max_chunks: int | None = None,
-    max_edges_per_chunk: int = MAX_EDGES_PER_CHUNK,
-    max_edges_per_document: int = MAX_EDGES_PER_DOCUMENT,
+    max_edges_per_chunk: int | None = None,
+    max_edges_per_document: int | None = None,
 ) -> ExtractionOutcome:
     """Extract a concept graph from ``chunks`` of ``document``.
 
     Writes concepts and edges through ``session`` and returns the run's outcome.
     The caller owns the transaction: this function flushes but never commits, so
-    a failed run can be rolled back as a unit.
+    a failed run can be rolled back as a unit. The caps default to the
+    ``GRAPH_*`` settings; an explicit argument overrides them (tests use this).
     """
     repo = ConceptGraphRepository(session, TenantScope(document.tenant_id))
     limit = (
         max_chunks if max_chunks is not None else settings.graph_max_extraction_chunks_per_document
     )
+    chunk_cap = (
+        max_edges_per_chunk
+        if max_edges_per_chunk is not None
+        else settings.graph_max_edges_per_chunk
+    )
+    document_cap = (
+        max_edges_per_document
+        if max_edges_per_document is not None
+        else settings.graph_max_edges_per_document
+    )
+    weights = confidence_weights(settings)
     selected = select_chunks(chunks, max_chunks=max(limit, 0))
     run = GraphExtractionRun(
         tenant_id=document.tenant_id,
         document_id=document.id,
-        prompt_version=PROMPT_VERSION,
+        prompt_version=settings.graph_extraction_prompt_version,
         model=settings.graph_model,
         extraction_config_version=_config_version(settings),
         status=ExtractionRunStatus.RUNNING,
@@ -703,7 +755,7 @@ async def extract_from_chunks(
 
         request = LLMRequest(
             task=ModelTask.EXTRACTION,
-            messages=build_extraction_messages(chunk),
+            messages=build_extraction_messages(chunk, max_relations=chunk_cap),
             temperature=0.0,
             response_model=ExtractionResult,
             purpose="graph.extract",
@@ -753,9 +805,9 @@ async def extract_from_chunks(
                 _count(rejection_counts, alias_gate)
 
         # Per-chunk cap on how many edges one model response may contribute.
-        for _ in parsed.relations[max_edges_per_chunk:]:
+        for _ in parsed.relations[chunk_cap:]:
             _count(rejection_counts, RejectionGate.CHUNK_EDGE_CAP)
-        for relation in parsed.relations[:max_edges_per_chunk]:
+        for relation in parsed.relations[:chunk_cap]:
             gate = (
                 gate_relation_known(relation.relation)
                 or gate_self_relation(relation.source_name, relation.target_name)
@@ -780,7 +832,7 @@ async def extract_from_chunks(
             cross_gate = gate_cross_course(
                 source.course_id,
                 target.course_id,
-                allow_cross_course=ALLOW_CROSS_COURSE_EDGES,
+                allow_cross_course=settings.graph_cross_course_edges,
             )
             if cross_gate is not None:
                 _count(rejection_counts, cross_gate)
@@ -818,7 +870,7 @@ async def extract_from_chunks(
             _count(rejection_counts, RejectionGate.CONTRADICTORY_CYCLE)
             edges_rejected += 1
             continue
-        if gate_document_edge_cap(edges_written, cap=max_edges_per_document) is not None:
+        if gate_document_edge_cap(edges_written, cap=document_cap) is not None:
             _count(rejection_counts, RejectionGate.DOCUMENT_EDGE_CAP)
             edges_rejected += 1
             continue
@@ -831,14 +883,16 @@ async def extract_from_chunks(
             edges_rejected += 1
             continue
 
-        score, disposition, cue_value, verified_conflict = await _score_edge(repo, evidence)
+        score, disposition, cue_value, verified_conflict = await _score_edge(
+            repo, evidence, weights=weights
+        )
         if gate_verified_conflict(verified_conflict) is not None:
             # A human decision is final: the new corroboration is queued for
             # review and the verified row is left exactly as it was.
             _count(rejection_counts, RejectionGate.VERIFIED_CONFLICT)
             edges_queued += 1
             continue
-        if gate_confidence_floor(score) is not None:
+        if gate_confidence_floor(score, floor=weights.review_floor) is not None:
             _count(rejection_counts, RejectionGate.CONFIDENCE_FLOOR)
             edges_rejected += 1
             continue
@@ -856,7 +910,7 @@ async def extract_from_chunks(
             source_quote=evidence.first_quote,
             provenance_sources=evidence.provenance_sources,
             extraction_run_id=run.id,
-            prompt_version=PROMPT_VERSION,
+            prompt_version=settings.graph_extraction_prompt_version,
             model=settings.graph_model,
         )
         if not written:
@@ -913,13 +967,13 @@ __all__ = [
     "ALLOW_CROSS_COURSE_EDGES",
     "MAX_EDGES_PER_CHUNK",
     "MAX_EDGES_PER_DOCUMENT",
-    "PROMPT_VERSION",
     "SYSTEM_PROMPT",
     "ExtractedEdgeSummary",
     "ExtractionOutcome",
     "RejectionGate",
     "build_extraction_messages",
     "chunk_cue_score",
+    "confidence_weights",
     "contradictory_requires_edges",
     "extract_from_chunks",
     "gate_alias_collision",

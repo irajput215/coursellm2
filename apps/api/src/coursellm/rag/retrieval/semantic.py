@@ -118,6 +118,8 @@ async def semantic_search(
                 Chunk.page,
                 Chunk.topic,
                 Chunk.token_count,
+                Chunk.chunk_index,
+                Chunk.starts_mid_sentence,
                 Document.source_type,
                 distance.label("distance"),
             )
@@ -162,6 +164,8 @@ async def semantic_search(
             rank=rank,
             score=1.0 - float(row["distance"]),
             retriever="semantic",
+            chunk_index=row["chunk_index"],
+            starts_mid_sentence=bool(row["starts_mid_sentence"]),
         )
         for rank, row in enumerate(rows, start=1)
     ]

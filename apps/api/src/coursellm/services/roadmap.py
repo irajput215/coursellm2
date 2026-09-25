@@ -27,7 +27,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from coursellm.core.config import Settings
+from coursellm.core.config import Settings, get_settings
 from coursellm.core.errors import NotFoundError
 from coursellm.db.models.graph import Concept
 from coursellm.db.models.learning import (
@@ -52,6 +52,7 @@ from coursellm.learning.progress import (
     attempt_counts,
     last_seen_map,
     learning_velocity,
+    mastery_weights,
     project_mastery,
     stale_concepts,
     weak_concepts,
@@ -149,9 +150,14 @@ def _planned_signature(steps: Sequence[PlannedStep]) -> tuple[tuple[object, ...]
 class RoadmapService:
     """Use cases over roadmaps, steps and the progress projection."""
 
-    def __init__(self, session: AsyncSession, scope: TenantScope) -> None:
+    def __init__(
+        self, session: AsyncSession, scope: TenantScope, settings: Settings | None = None
+    ) -> None:
         self._session = session
         self._scope = scope
+        # Optional so callers that do not care about tunable weights (tests,
+        # scripts) keep working; the process settings are the production source.
+        self._settings = settings if settings is not None else get_settings()
 
     @property
     def tenant_id(self) -> uuid.UUID:
@@ -176,6 +182,12 @@ class RoadmapService:
         tool can report the plan's degradation markers without persisting them),
         and whether a new revision was actually written. The third value lets the
         HTTP layer answer ``200`` on a reuse instead of a misleading ``201``.
+
+        Idempotency is **content-addressed**, not keyed by an ``idempotency_key``
+        column: a re-post whose deterministic plan is byte-for-byte the current
+        revision returns that revision rather than manufacturing history. The
+        choice is deliberate — a caller-supplied key can be reused for a
+        *different* plan, while hashing the plan itself cannot.
         """
         plan = await build_roadmap(
             self._session,
@@ -228,7 +240,12 @@ class RoadmapService:
         """Revise a roadmap from measured progress, or return it unchanged."""
         detail = await self.get_detail(roadmap_id=roadmap_id, user_id=user_id)
         roadmap = detail.roadmap
-        mastery = await load_mastery(self._session, self._scope, user_id=user_id)
+        mastery = await load_mastery(
+            self._session,
+            self._scope,
+            user_id=user_id,
+            weights=mastery_weights(self._settings),
+        )
         events = await self._events_for(user_id)
         velocity = learning_velocity(events, datetime.now(UTC))
         candidates = await self._new_candidate_steps(roadmap, detail.steps, mastery, settings)
@@ -279,7 +296,12 @@ class RoadmapService:
             msg = "Roadmap step not found."
             raise NotFoundError(msg)
 
-        mastery = await load_mastery(self._session, self._scope, user_id=user_id)
+        mastery = await load_mastery(
+            self._session,
+            self._scope,
+            user_id=user_id,
+            weights=mastery_weights(self._settings),
+        )
         if status is RoadmapStepStatus.COMPLETED:
             if step.status is RoadmapStepStatus.COMPLETED:
                 # Idempotent: a repeated completion is a no-op, not a second event.
@@ -356,7 +378,7 @@ class RoadmapService:
         now = datetime.now(UTC)
         events = await self._events_for(user_id)
         attempts = await self._attempts_for(user_id)
-        mastery = project_mastery(events, attempts)
+        mastery = project_mastery(events, attempts, weights=mastery_weights(self._settings))
         seen = last_seen_map(events, attempts)
         weak = weak_concepts(mastery, DEFAULT_MASTERY_THRESHOLD)[:WEAK_CONCEPT_LIMIT]
         stale = stale_concepts(mastery, seen, now)

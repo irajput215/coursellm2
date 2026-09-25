@@ -104,11 +104,27 @@ async def tenant_session(settings: Settings, scope: TenantScope) -> AsyncIterato
 
     The GUC is set *inside* the transaction and before any other statement, so
     every query in the block — including the first — is subject to RLS.
+
+    The transaction is begun by the first statement rather than by a
+    ``session.begin()`` context manager. A chat turn must commit the user
+    message *before* it runs generation, so that a hard generation failure rolls
+    back only the answer and the question survives; SQLAlchemy refuses further
+    statements once the transaction owned by a ``session.begin()`` context
+    manager has been committed mid-block. Owning commit/rollback here keeps the
+    block atomic on the failure path while allowing an explicit mid-block
+    commit. A service that commits re-applies the GUC itself
+    (``services.chat.commit_turn``) because ``set_config(..., is_local => true)``
+    is transaction-scoped.
     """
     factory = await get_session_factory(settings)
-    async with factory() as session, session.begin():
-        await set_tenant_guc(session, scope.tenant_id)
-        yield session
+    async with factory() as session:
+        try:
+            await set_tenant_guc(session, scope.tenant_id)
+            yield session
+            await session.commit()
+        except BaseException:
+            await session.rollback()
+            raise
 
 
 async def assert_tenant_rows_visible(session: AsyncSession, tenant_id: uuid.UUID) -> bool:
