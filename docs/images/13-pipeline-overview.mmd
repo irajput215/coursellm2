@@ -1,0 +1,9 @@
+flowchart LR
+    A["Student uploads<br/>course material"] --> B["Ingestion<br/>parse · chunk · embed"]
+    B --> C["Hybrid retrieval<br/>pgvector HNSW ∪ BM25"]
+    C --> D["Reciprocal Rank Fusion<br/>k = 60"]
+    D --> E["Cross-encoder<br/>reranking"]
+    E --> F["Bounded LangGraph<br/>grounded answer + citations"]
+    F --> G["Roadmap · quiz<br/>progress"]
+    C -.-> H["Knowledge graph<br/>prerequisites"]
+    F -.-> I["RAGAS-style<br/>evaluation"]
