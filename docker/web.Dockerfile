@@ -24,7 +24,7 @@
 
 # ---- build ------------------------------------------------------------------
 # Pinned by tag AND by the multi-architecture manifest-list digest.
-FROM node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1 AS build
+FROM node:26-alpine@sha256:0b36e8c136b94cd4fcf02188228e76c31ad5872eef3fec8cbd2eee500cfd9e80 AS build
 
 WORKDIR /app
 
@@ -50,7 +50,7 @@ RUN npm run build
 # paths. It listens on 8080 because a non-root process cannot bind port 80 —
 # which is why docker/nginx.conf says `listen 8080` and compose maps the host
 # port onto 8080.
-FROM nginxinc/nginx-unprivileged:1.27-alpine@sha256:65e3e85dbaed8ba248841d9d58a899b6197106c23cb0ff1a132b7bfe0547e4c0 AS serve
+FROM nginxinc/nginx-unprivileged:1.29-alpine@sha256:0c79d56aee561a1d81c63f00eee5fb5fe29279560cdc55e91425133104c7fbe6 AS serve
 
 LABEL org.opencontainers.image.title="coursellm-web" \
       org.opencontainers.image.description="CourseLLM web client — static assets served by nginx" \
